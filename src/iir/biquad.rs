@@ -1,0 +1,773 @@
+use core::{marker::PhantomData, time::Duration};
+
+use crate::{
+    internal::ConfigurableFilter, CommonConfigurableFilter, CommonFilterConfig,
+    CommonFilterConfigBuilder, Error, Filter,
+};
+use num_traits::{Float, FloatConst};
+
+/// Supported biquad filter types. Each type corresponds to a specific transfer function and frequency response:
+/// - `LowPass`: Attenuates frequencies above the cutoff. This variant is a 2nd-order Butterworth
+///   filter, fixing the quality factor as 1/sqrt(2) for maximally flat passpand
+/// - `Notch`: Attenuates frequencies around the cutoff
+/// - `BandPass`: Attenuates frequencies far from the cutoff
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum BiquadFilterType {
+    LowPass,
+    Notch,
+    BandPass,
+}
+
+/// Defines the topology of the biquad filter and manages the internal states.
+pub trait BiquadTopology<T: Float>: Default {
+    /// Compute the output of the filter for the given input and coefficients, while updating the internal state.
+    fn compute(&mut self, input: T, coeffs: &BiquadFilterCoefficients<T>) -> T;
+
+    /// Reset the topology's internal delay-line to the steady-state corresponding
+    /// to constant output `state`.
+    ///
+    /// Coefficients are supplied because the correct initial state depends on the
+    /// filter's transfer function (topology alone does not know it).
+    fn reset(&mut self, state: T, coeffs: &BiquadFilterCoefficients<T>) -> Result<(), Error>;
+
+    /// Returns the latest input sample.
+    fn input(&self) -> T;
+
+    /// Returns the previous input sample (the one before the latest).
+    fn prev_input(&self) -> T;
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct BiquadFilterConfig<T: Float, P: BiquadTopology<T>> {
+    base_config: CommonFilterConfig<T>,
+    filter_type: BiquadFilterType,
+    q: T,
+    _topology: PhantomData<P>,
+}
+
+impl<T: Float, P: BiquadTopology<T>> BiquadFilterConfig<T, P> {
+    /// Returns the cutoff frequency in Hz.
+    pub fn cutoff_frequency_hz(&self) -> T {
+        self.base_config.cutoff_frequency_hz
+    }
+
+    /// Returns the sample frequency in Hz.
+    pub fn sample_frequency_hz(&self) -> T {
+        self.base_config.sample_frequency_hz
+    }
+
+    /// Returns the filter type (LowPass, Notch, BandPass).
+    pub fn filter_type(&self) -> BiquadFilterType {
+        self.filter_type
+    }
+
+    /// Returns the quality factor `Q`, which controls the filter's bandwidth and resonance. For
+    /// low-pass filters, this is fixed to 1/sqrt(2) for a Butterworth response; for other filter
+    /// types, it can be set by the user.
+    pub fn quality_factor(&self) -> T {
+        self.q
+    }
+
+    /// Sets the cutoff frequency in Hz. Must be less than half the sample frequency (Nyquist limit).
+    pub fn set_cutoff_frequency_hz(&mut self, cutoff_frequency_hz: T) -> Result<(), Error> {
+        if cutoff_frequency_hz >= self.sample_frequency_hz() * T::from(0.5).unwrap() {
+            return Err(Error::NyquistTheoremViolation);
+        }
+        self.base_config
+            .set_cutoff_frequency_hz(cutoff_frequency_hz)
+    }
+
+    /// Sets the sample frequency in Hz. Must be greater than twice the cutoff frequency (Nyquist limit).
+    pub fn set_sample_frequency_hz(&mut self, sample_frequency_hz: T) -> Result<(), Error> {
+        if self.cutoff_frequency_hz() >= sample_frequency_hz * T::from(0.5).unwrap() {
+            return Err(Error::NyquistTheoremViolation);
+        }
+        self.base_config
+            .set_sample_frequency_hz(sample_frequency_hz)
+    }
+
+    /// Sets the sample frequency by specifying the loop time. The sample frequency is the reciprocal of the loop time.
+    pub fn set_sample_loop_time(
+        &mut self,
+        sample_loop_time: core::time::Duration,
+    ) -> Result<(), Error> {
+        let sample_frequency_hz = T::from(sample_loop_time.as_secs_f64().recip())
+            .unwrap_or_else(|| unreachable!("f64 is always representable in T: Float"));
+        self.set_sample_frequency_hz(sample_frequency_hz)
+    }
+}
+
+/// Builder for constructing a [`BiquadFilterConfig`] with a defined the [`BiquadTopology`]
+#[derive(Debug, Copy, Clone)]
+pub struct BiquadFilterConfigBuilder<T: Float, P: BiquadTopology<T>> {
+    base_config_builder: CommonFilterConfigBuilder<T>,
+    filter_type: Option<BiquadFilterType>,
+    q: Option<T>,
+    _topology: PhantomData<P>,
+}
+
+impl<T: Float> BiquadFilterConfigBuilder<T, DirectForm1<T>> {
+    /// Creates a new builder for a biquad filter with Direct Form 1 topology.
+    pub fn direct_form_1() -> Self {
+        Self {
+            base_config_builder: CommonFilterConfigBuilder::default(),
+            filter_type: None,
+            q: None,
+            _topology: PhantomData,
+        }
+    }
+}
+
+impl<T: Float> BiquadFilterConfigBuilder<T, DirectForm2<T>> {
+    /// Creates a new builder for a biquad filter with Direct Form 2 topology.
+    pub fn direct_form_2() -> Self {
+        Self {
+            base_config_builder: CommonFilterConfigBuilder::default(),
+            filter_type: None,
+            q: None,
+            _topology: PhantomData,
+        }
+    }
+}
+
+impl<T: Float + FloatConst, P: BiquadTopology<T>> BiquadFilterConfigBuilder<T, P> {
+    /// Configures the cutoff frequency in Hz.
+    pub fn cutoff_frequency_hz(mut self, cutoff_frequency_hz: T) -> Self {
+        self.base_config_builder = self
+            .base_config_builder
+            .cutoff_frequency_hz(cutoff_frequency_hz);
+        self
+    }
+
+    /// Configures the sample frequency in Hz.
+    pub fn sample_frequency_hz(mut self, sample_frequency_hz: T) -> Self {
+        self.base_config_builder = self
+            .base_config_builder
+            .sample_frequency_hz(sample_frequency_hz);
+        self
+    }
+
+    /// Configures the filter type (LowPass, Notch, BandPass).
+    pub fn filter_type(mut self, filter_type: BiquadFilterType) -> Self {
+        self.filter_type = Some(filter_type);
+        self
+    }
+
+    /// Configures the quality factor `Q`, which controls the filter's bandwidth and resonance.
+    ///
+    /// # Warning
+    /// If the filter type is `LowPass`, this value is ignored and overridden to 1/sqrt(2) for a Butterworth response.
+    pub fn q(mut self, q: T) -> Self {
+        self.q = Some(q);
+        self
+    }
+
+    /// Builds the `BiquadFilterConfig` from the provided parameters. Validates that the cutoff
+    /// frequency is below the Nyquist limit and that the quality factor is positive and finite,
+    /// while deferring to [`CommonFilterConfigBuilder::build`] for common parameter validation.
+    /// Returns an error if any validation fails.
+    pub fn build(self) -> Result<BiquadFilterConfig<T, P>, Error> {
+        let base_config = self.base_config_builder.build()?;
+
+        if base_config.cutoff_frequency_hz
+            >= base_config.sample_frequency_hz * T::from(0.5).unwrap()
+        {
+            return Err(Error::NyquistTheoremViolation);
+        }
+
+        let filter_type = self.filter_type.unwrap_or(BiquadFilterType::LowPass);
+        // For low-pass filters, the quality factor is fixed to 1/sqrt(2) for a Butterworth
+        // response. For other filter types, use the provided Q value.
+        let q = if let BiquadFilterType::LowPass = filter_type {
+            T::FRAC_1_SQRT_2()
+        } else {
+            self.q.unwrap_or_else(|| T::from(1.0).unwrap())
+        };
+
+        if !q.is_finite() {
+            return Err(Error::NonFiniteQualityFactor);
+        }
+
+        if q <= t!(0) {
+            return Err(Error::NonPositiveQualityFactor);
+        }
+
+        Ok(BiquadFilterConfig {
+            base_config,
+            filter_type,
+            q,
+            _topology: PhantomData,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct BiquadFilterCoefficients<T: Float> {
+    a1: T,
+    a2: T,
+    b0: T,
+    b1: T,
+    b2: T,
+}
+
+#[derive(Debug, Clone)]
+pub struct DirectForm2<T: Float> {
+    x1: T,
+    x2: T,
+}
+
+impl<T: Float> Default for DirectForm2<T> {
+    fn default() -> Self {
+        Self {
+            x1: t!(0),
+            x2: t!(0),
+        }
+    }
+}
+
+impl<T: Float> DirectForm2<T> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl<T: Float> BiquadTopology<T> for DirectForm2<T> {
+    fn compute(&mut self, input: T, coeffs: &BiquadFilterCoefficients<T>) -> T {
+        let result = coeffs.b0 * input + self.x1;
+
+        self.x1 = coeffs.b1 * input - coeffs.a1 * result + self.x2;
+        self.x2 = coeffs.b2 * input - coeffs.a2 * result;
+        result
+    }
+
+    /// Reset the DF2T delay line to the steady-state values for constant output `state`.
+    ///
+    /// # Deviation from Betaflight
+    ///
+    /// Betaflight's `filter.c` has no generic reset operation — each filter is
+    /// initialised to zero and never explicitly reset at runtime.  This
+    /// implementation diverges by deriving the correct internal state from the
+    /// current coefficients so that the filter produces `state` immediately on
+    /// the next call to [`BiquadFilter::apply`] with input `state`.
+    ///
+    /// At steady state with constant input `u` and output `s = G·u`
+    /// (`G = (b0+b1+b2)/(1+a1+a2)` is the DC gain):
+    ///
+    /// ```text
+    /// x1 = s - b0·u  =  (1 - b0/G) · s
+    /// x2 = b2·u - a2·s  =  (b2/G - a2) · s
+    /// ```
+    ///
+    /// For unity-DC-gain filter types (LowPass, Notch) this simplifies to
+    /// `x1 = (1-b0)·s` and `x2 = (b2-a2)·s`.
+    ///
+    /// # BandPass edge case
+    ///
+    /// BandPass filters have zero DC gain (`b0+b1+b2 = 0`), so no finite
+    /// constant input produces a nonzero constant output.  Resetting to a
+    /// nonzero `state` is therefore undefined; the delay line is zeroed and
+    /// `Ok(())` is returned.
+    fn reset(&mut self, state: T, coeffs: &BiquadFilterCoefficients<T>) -> Result<(), Error> {
+        if !state.is_finite() {
+            return Err(Error::NonFiniteState);
+        }
+
+        let dc_den = coeffs.b0 + coeffs.b1 + coeffs.b2;
+
+        if dc_den == t!(0) {
+            // Zero DC gain (BandPass): steady state is undefined; zero the delay line.
+            self.x1 = t!(0);
+            self.x2 = t!(0);
+            return Ok(());
+        }
+
+        // u: the constant input that produces constant output `state`.
+        let dc_num = t!(1) + coeffs.a1 + coeffs.a2;
+        let u = state * dc_num / dc_den;
+        self.x1 = state - coeffs.b0 * u;
+        self.x2 = coeffs.b2 * u - coeffs.a2 * state;
+        Ok(())
+    }
+
+    fn input(&self) -> T {
+        self.x1
+    }
+
+    fn prev_input(&self) -> T {
+        self.x2
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct DirectForm1<T: Float> {
+    x1: T,
+    x2: T,
+    y1: T,
+    y2: T,
+}
+
+impl<T: Float> Default for DirectForm1<T> {
+    fn default() -> Self {
+        Self {
+            x1: t!(0),
+            x2: t!(0),
+            y1: t!(0),
+            y2: t!(0),
+        }
+    }
+}
+
+impl<T: Float> DirectForm1<T> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl<T: Float> BiquadTopology<T> for DirectForm1<T> {
+    /// Compute the output of the DF1 biquad filter for the given input and coefficients, while updating the internal state.
+    fn compute(&mut self, input: T, coeffs: &BiquadFilterCoefficients<T>) -> T {
+        let result = coeffs.b0 * input + coeffs.b1 * self.x1 + coeffs.b2 * self.x2
+            - coeffs.a1 * self.y1
+            - coeffs.a2 * self.y2;
+
+        // shift x1 to x2, input to x1
+        self.x2 = self.x1;
+        self.x1 = input;
+
+        // shift y1 to y2, result to y1
+        self.y2 = self.y1;
+        self.y1 = result;
+        result
+    }
+
+    /// Reset all four delay elements to `state`.
+    ///
+    /// For unity-DC-gain filter types (LowPass, Notch) this produces the correct
+    /// steady-state condition: applying input `state` immediately after reset
+    /// yields output `state`.  Coefficients are accepted but unused; DF1 state
+    /// initialisation does not require them because the delay elements directly
+    /// represent past inputs and outputs.
+    fn reset(&mut self, state: T, _coeffs: &BiquadFilterCoefficients<T>) -> Result<(), Error> {
+        if !state.is_finite() {
+            return Err(Error::NonFiniteState);
+        }
+        self.x1 = state;
+        self.x2 = state;
+        self.y1 = state;
+        self.y2 = state;
+        Ok(())
+    }
+
+    fn input(&self) -> T {
+        self.x1
+    }
+
+    fn prev_input(&self) -> T {
+        self.x2
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct BiquadFilter<T: Float, P: BiquadTopology<T>> {
+    coeffs: BiquadFilterCoefficients<T>,
+    topology: P,
+    config: BiquadFilterConfig<T, P>,
+}
+
+impl<T: Float + FloatConst, P: BiquadTopology<T>> BiquadFilter<T, P> {
+    fn compute_coeffs(config: &BiquadFilterConfig<T, P>) -> BiquadFilterCoefficients<T> {
+        let CommonFilterConfig {
+            cutoff_frequency_hz,
+            sample_frequency_hz,
+        } = config.base_config;
+
+        // Betaflight source has an additional 0.000001 factor because their sample frequency_hz is an
+        // interval in microseconds
+        let omega = t!(2) * T::PI() * cutoff_frequency_hz / sample_frequency_hz;
+        let sn = omega.sin();
+        let cs = omega.cos();
+
+        let quality_factor = config.q;
+
+        let alpha = sn / (t!(2) * quality_factor);
+        let mut coeffs = BiquadFilterCoefficients {
+            a1: t!(0),
+            a2: t!(0),
+            b0: t!(0),
+            b1: t!(0),
+            b2: t!(0),
+        };
+
+        match config.filter_type {
+            BiquadFilterType::LowPass => {
+                // 2nd order Butterworth (with Q=1/sqrt(2)) / Butterworth biquad section with Q
+                // described in http://www.ti.com/lit/an/slaa447/slaa447.pdf
+                coeffs.b1 = t!(1) - cs;
+                coeffs.b0 = coeffs.b1 * t!(0.5);
+                coeffs.b2 = coeffs.b0;
+                coeffs.a1 = -t!(2) * cs;
+                coeffs.a2 = t!(1) - alpha;
+            }
+            BiquadFilterType::Notch => {
+                coeffs.b0 = t!(1);
+                coeffs.b1 = -t!(2) * cs;
+                coeffs.b2 = t!(1);
+                coeffs.a1 = coeffs.b1;
+                coeffs.a2 = t!(1) - alpha;
+            }
+            BiquadFilterType::BandPass => {
+                coeffs.b0 = alpha;
+                coeffs.b1 = t!(0);
+                coeffs.b2 = -alpha;
+                coeffs.a1 = -t!(2) * cs;
+                coeffs.a2 = t!(1) - alpha;
+            }
+        }
+        let a0 = t!(1) + alpha;
+        coeffs.a1 = coeffs.a1 / a0;
+        coeffs.a2 = coeffs.a2 / a0;
+        coeffs.b0 = coeffs.b0 / a0;
+        coeffs.b1 = coeffs.b1 / a0;
+        coeffs.b2 = coeffs.b2 / a0;
+        coeffs
+    }
+
+    /// Creates a new `BiquadFilter` with the given configuration. The initial state is set to zero.
+    pub fn new(config: BiquadFilterConfig<T, P>) -> Self {
+        Self {
+            coeffs: Self::compute_coeffs(&config),
+            topology: P::default(),
+            config,
+        }
+    }
+
+    /// Returns the latest input to the filter.
+    pub fn input(&self) -> T {
+        self.topology.input()
+    }
+}
+
+impl<T: Float + FloatConst, P: BiquadTopology<T>> ConfigurableFilter<T> for BiquadFilter<T, P> {
+    fn update_configuration(&mut self) -> Result<(), Error> {
+        // Recompute coefficients based on the current config
+        if self.config.cutoff_frequency_hz()
+            >= self.config.sample_frequency_hz() * T::from(0.5).unwrap()
+        {
+            return Err(Error::NyquistTheoremViolation);
+        }
+
+        self.coeffs = Self::compute_coeffs(&self.config);
+        Ok(())
+    }
+}
+
+impl<T: Float + FloatConst, P: BiquadTopology<T>> CommonConfigurableFilter<T>
+    for BiquadFilter<T, P>
+{
+    /// Sets the cutoff frequency, in Hz, of the filter. Defers to
+    /// [`BiquadFilterConfig::set_cutoff_frequency_hz`] for validation, including Nyquist
+    /// enforcement. If the update is successful, the filter coefficients are recomputed to reflect
+    /// the new cutoff frequency. Returns an error if validation fails.
+    fn set_cutoff_frequency_hz(&mut self, f: T) -> Result<(), Error> {
+        self.config.set_cutoff_frequency_hz(f)?;
+        self.update_configuration()
+    }
+
+    /// Sets the sample frequency, in Hz, of the filter. Defers to
+    /// [`BiquadFilterConfig::set_sample_frequency_hz`] for validation, including Nyquist
+    /// enforcement. If the update is successful, the filter coefficients are recomputed to reflect
+    /// the new sample frequency. Returns an error if validation fails.
+    fn set_sample_frequency_hz(&mut self, f: T) -> Result<(), Error> {
+        self.config.set_sample_frequency_hz(f)?;
+        self.update_configuration()
+    }
+
+    /// Sets the sample frequency by specifying the loop time. The sample frequency is the reciprocal of the loop time. Defers to
+    /// [`BiquadFilterConfig::set_sample_loop_time`] for validation, including Nyquist enforcement.
+    /// If the update is successful, the filter coefficients are recomputed to reflect the new
+    /// sample frequency. Returns an error if validation fails.
+    fn set_sample_loop_time(&mut self, dt: Duration) -> Result<(), Error> {
+        self.config.set_sample_loop_time(dt)?;
+        self.update_configuration()
+    }
+
+    /// Returns the internal configuration of the filter.
+    fn config(&self) -> &CommonFilterConfig<T> {
+        &self.config.base_config
+    }
+
+    /// Returns a mutable reference to the internal configuration of the filter. Modifying the
+    /// configuration directly does not automatically update the filter coefficients; after making
+    /// changes, you must call [`BiquadFilter::update_configuration`] to apply the changes and
+    /// recompute the coefficients. Returns a mutable reference to the internal configuration of
+    /// the filter.
+    fn config_mut(&mut self) -> &mut CommonFilterConfig<T> {
+        &mut self.config.base_config
+    }
+}
+
+impl<T: Float, P: BiquadTopology<T>> Filter<T> for BiquadFilter<T, P> {
+    fn apply(&mut self, input: T) -> T {
+        self.topology.compute(input, &self.coeffs)
+    }
+
+    fn reset(&mut self, state: T) -> Result<(), Error> {
+        self.topology.reset(state, &self.coeffs)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use approx::assert_relative_eq;
+
+    // Helper for a standard 100Hz LPF on a 1kHz loop
+    fn df1_config() -> BiquadFilterConfig<f64, DirectForm1<f64>> {
+        BiquadFilterConfigBuilder::direct_form_1()
+            .filter_type(BiquadFilterType::LowPass)
+            .cutoff_frequency_hz(100.0)
+            .sample_frequency_hz(1000.0)
+            .build()
+            .unwrap()
+    }
+
+    fn df2_config() -> BiquadFilterConfig<f64, DirectForm2<f64>> {
+        BiquadFilterConfigBuilder::direct_form_2()
+            .filter_type(BiquadFilterType::LowPass)
+            .cutoff_frequency_hz(100.0)
+            .sample_frequency_hz(1000.0)
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn test_biquad_lpf_coefficients() {
+        let filter = BiquadFilter::new(df1_config());
+        let c = &filter.coeffs;
+
+        // For 100Hz/1000Hz LPF (Butterworth Q=0.7071):
+        // omega = 2*PI*100/1000 = 0.628318
+        // alpha = sin(omega)/(2*Q) = 0.587785 / 1.4142 = 0.41562
+        // a0 = 1 + alpha = 1.41562
+        // b1 = (1 - cos(omega)) / a0 = (1 - 0.809017) / 1.41562 ≈ 0.1349
+        assert_relative_eq!(c.b1, 0.1349, epsilon = 1e-4);
+    }
+
+    #[test]
+    fn test_biquad_notch_null_response() {
+        let config = BiquadFilterConfigBuilder::direct_form_1()
+            .filter_type(BiquadFilterType::Notch)
+            .cutoff_frequency_hz(250.0) // Center frequency
+            .sample_frequency_hz(1000.0)
+            .q(10.0) // Narrow notch
+            .build()
+            .unwrap();
+
+        let mut filter = BiquadFilter::new(config);
+
+        // A notch filter should significantly attenuate its center frequency.
+        // We simulate a 250Hz sine wave (exactly 1/4 of fs)
+        let mut max_output = 0.0f64;
+        for i in 0..1000 {
+            let input = (2.0 * core::f64::consts::PI * 0.25 * i as f64).sin();
+            let out = filter.apply(input).abs();
+            if i > 500 && out > max_output {
+                max_output = out;
+            }
+        }
+        // Output should be near zero (high attenuation)
+        assert!(
+            max_output < 0.05,
+            "Notch failed to attenuate center frequency, got {}",
+            max_output
+        );
+    }
+
+    #[test]
+    fn test_topology_equivalence() {
+        let mut df1 = BiquadFilter::new(df1_config());
+        let mut df2 = BiquadFilter::new(df2_config());
+
+        // Apply same inputs to both topologies
+        for i in 0..20 {
+            let input = (i as f64 * 0.1).sin();
+            let out1 = df1.apply(input);
+            let out2 = df2.apply(input);
+            // They should be identical within floating point precision
+            assert_relative_eq!(out1, out2, epsilon = 1e-12);
+        }
+    }
+
+    #[test]
+    fn test_biquad_reset_steady_state() {
+        let mut filter = BiquadFilter::new(df1_config());
+
+        // Prime the filter to 100.0
+        filter.reset(100.0).expect("Reset failed");
+
+        // The first apply of the same value should result in exactly that value
+        let out = filter.apply(100.0);
+        assert_relative_eq!(out, 100.0);
+    }
+
+    #[test]
+    fn test_biquad_dynamic_reconfiguration() {
+        let mut filter = BiquadFilter::new(df1_config());
+        let initial_b0 = filter.coeffs.b0;
+
+        // Changing cutoff should update coefficients via the Bridge pattern
+        filter.set_cutoff_frequency_hz(200.0).unwrap();
+
+        assert_ne!(filter.coeffs.b0, initial_b0);
+        assert_eq!(filter.cutoff_frequency_hz(), 200.0);
+    }
+
+    #[test]
+    fn test_lpf_unity_gain_dc() {
+        let mut filter = BiquadFilter::new(df1_config());
+
+        // Constant input should eventually result in constant output of the same value
+        let input = 1.0;
+        let mut last_out = 0.0;
+        for _ in 0..200 {
+            last_out = filter.apply(input);
+        }
+        assert_relative_eq!(last_out, 1.0, epsilon = 1e-10);
+    }
+
+    // --- Nyquist enforcement tests ---
+
+    #[test]
+    fn test_nyquist_rejected_at_build() {
+        // Exactly at Nyquist (f_c = f_s/2) must be rejected
+        let err = BiquadFilterConfigBuilder::direct_form_1()
+            .cutoff_frequency_hz(500.0)
+            .sample_frequency_hz(1000.0)
+            .build()
+            .unwrap_err();
+        assert_eq!(err, Error::NyquistTheoremViolation);
+
+        // Above Nyquist (f_c > f_s/2) must be rejected
+        let err = BiquadFilterConfigBuilder::direct_form_1()
+            .cutoff_frequency_hz(600.0)
+            .sample_frequency_hz(1000.0)
+            .build()
+            .unwrap_err();
+        assert_eq!(err, Error::NyquistTheoremViolation);
+
+        // Just below Nyquist must be accepted
+        assert!(BiquadFilterConfigBuilder::direct_form_1()
+            .cutoff_frequency_hz(499.9)
+            .sample_frequency_hz(1000.0)
+            .build()
+            .is_ok());
+    }
+
+    #[test]
+    fn test_nyquist_set_cutoff_rejected_and_state_preserved() {
+        let mut filter = BiquadFilter::new(df1_config()); // 100Hz / 1000Hz
+        let b0_before = filter.coeffs.b0;
+        let b1_before = filter.coeffs.b1;
+        let b2_before = filter.coeffs.b2;
+
+        // Setting cutoff to Nyquist must fail
+        assert_eq!(
+            filter.set_cutoff_frequency_hz(500.0).unwrap_err(),
+            Error::NyquistTheoremViolation
+        );
+
+        // Config and coefficients must be unchanged after the failed update
+        assert_eq!(filter.cutoff_frequency_hz(), 100.0);
+        assert_eq!(filter.coeffs.b0, b0_before);
+        assert_eq!(filter.coeffs.b1, b1_before);
+        assert_eq!(filter.coeffs.b2, b2_before);
+    }
+
+    #[test]
+    fn test_nyquist_set_sample_frequency_rejected_and_state_preserved() {
+        let mut filter = BiquadFilter::new(df1_config()); // 100Hz / 1000Hz
+        let b0_before = filter.coeffs.b0;
+
+        // Reducing f_s so that the current cutoff (100Hz) >= new f_s/2 (75Hz)
+        assert_eq!(
+            filter.set_sample_frequency_hz(150.0).unwrap_err(),
+            Error::NyquistTheoremViolation
+        );
+
+        assert_eq!(filter.sample_frequency_hz(), 1000.0);
+        assert_eq!(filter.coeffs.b0, b0_before);
+    }
+
+    #[test]
+    fn test_nyquist_set_sample_loop_time_rejected_and_state_preserved() {
+        let mut filter = BiquadFilter::new(df1_config()); // 100Hz / 1000Hz
+        let b0_before = filter.coeffs.b0;
+
+        // 10ms loop time → f_s = 100Hz; cutoff 100Hz >= 50Hz → violation
+        assert_eq!(
+            filter
+                .set_sample_loop_time(Duration::from_millis(10))
+                .unwrap_err(),
+            Error::NyquistTheoremViolation
+        );
+
+        assert_eq!(filter.sample_frequency_hz(), 1000.0);
+        assert_eq!(filter.coeffs.b0, b0_before);
+    }
+
+    // --- DirectForm2 reset tests ---
+
+    #[test]
+    fn test_df2_reset_steady_state() {
+        // After reset(s), the first apply(s) must return s exactly.
+        let mut filter = BiquadFilter::new(df2_config());
+        filter.reset(100.0).expect("DF2 reset failed");
+        assert_relative_eq!(filter.apply(100.0), 100.0, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn test_df2_reset_matches_df1() {
+        // Both topologies, reset to the same value, must produce identical output
+        // sequences for the same subsequent inputs.
+        let mut df1 = BiquadFilter::new(df1_config());
+        let mut df2 = BiquadFilter::new(df2_config());
+
+        df1.reset(50.0).unwrap();
+        df2.reset(50.0).unwrap();
+
+        for i in 0..20 {
+            let input = (i as f64 * 0.3).sin() * 50.0;
+            assert_relative_eq!(df1.apply(input), df2.apply(input), epsilon = 1e-12);
+        }
+    }
+
+    #[test]
+    fn test_df2_reset_nonfinite_rejected() {
+        let mut filter = BiquadFilter::new(df2_config());
+        assert_eq!(filter.reset(f64::NAN).unwrap_err(), Error::NonFiniteState);
+        assert_eq!(
+            filter.reset(f64::INFINITY).unwrap_err(),
+            Error::NonFiniteState
+        );
+    }
+
+    #[test]
+    fn test_df2_bandpass_reset_zeros_state_and_remains_operational() {
+        // BandPass has zero DC gain; reset(s) zeros the delay line (defined behaviour)
+        // and the filter must still process subsequent inputs without panicking.
+        let config = BiquadFilterConfigBuilder::direct_form_2()
+            .filter_type(BiquadFilterType::BandPass)
+            .cutoff_frequency_hz(100.0)
+            .sample_frequency_hz(1000.0)
+            .q(1.0)
+            .build()
+            .unwrap();
+        let mut filter = BiquadFilter::new(config);
+
+        assert!(filter.reset(999.0).is_ok());
+
+        // Delay line must have been zeroed: with zero initial state the first
+        // output for a zero input is zero.
+        assert_eq!(filter.apply(0.0), 0.0);
+    }
+}

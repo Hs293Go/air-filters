@@ -1,0 +1,22 @@
+[package]
+name = "air-filters"
+description = "Common digital filters inspired by Betaflight for embedded light control applications."
+version = "0.0.1"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/Hs293Go/air-filters.git"
+keywords = ["filter", "iir", "signal-processing", "no-std", "biquad"]
+categories = ["no-std", "science::robotics"]
+
+[dependencies]
+num-traits = { version = "0.2.19", default-features = false }
+thiserror = { version = "2.0.18", optional = true }
+
+[features]
+default = ["std"]
+std = ["num-traits/std", "dep:thiserror"]
+libm = ["num-traits/libm"]
+thiserror = ["dep:thiserror"]
+
+[dev-dependencies]
+approx = "0.5.1"
