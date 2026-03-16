@@ -26,13 +26,44 @@ The following filters are implemented:
 
 ## Example
 
-```rust
-  use air_filters::{iir::Pt1Filter, CommonFilterConfigBuilder, Filter};
+- Filtering a signal with a PT1 filter:
 
-  let config = CommonFilterConfigBuilder::new()
-      .cutoff_frequency_hz(50.0)
-      .sample_frequency_hz(1000.0)
-      .build()?;
-  let mut filter = Pt1Filter::new(config);
-  let output = filter.apply(sensor_reading);
+```rust
+use air_filters::{iir::pt1::Pt1Filter, CommonFilterConfigBuilder, Filter};
+
+fn main() {
+    let config = CommonFilterConfigBuilder::new()
+        .cutoff_frequency_hz(50.0)
+        .sample_frequency_hz(1000.0)
+        .build()
+        .unwrap();
+    let mut filter = Pt1Filter::new(config);
+
+    let output = filter.apply(1.0);
+    println!("Response: {output}");
+}
+```
+
+- Filtering a signal with a biquad low-pass filter:
+
+```rust
+use air_filters::{
+    self,
+    iir::biquad::{BiquadFilter, BiquadFilterConfigBuilder, BiquadFilterType},
+    Filter,
+};
+
+fn main() {
+    let cfg = BiquadFilterConfigBuilder::direct_form_2()
+        .cutoff_frequency_hz(40.0)
+        .sample_frequency_hz(250.0)
+        .filter_type(BiquadFilterType::LowPass)
+        .build()
+        .expect("Failed to build biquad filter config");
+
+    let mut filter = BiquadFilter::new(cfg);
+
+    let output = filter.apply(1.0);
+    println!("Response: {output}");
+}
 ```
