@@ -48,6 +48,7 @@ use core::time::Duration;
 use num_traits::float::FloatCore;
 
 pub mod iir;
+pub mod nonlinear;
 
 /// Errors that can occur during filter configuration and operation. Each error variant
 /// is annotated with a descriptive message via [`thiserror`] when the `std` feature is enabled.
@@ -63,6 +64,9 @@ pub enum Error {
     /// Signals when a quality factor is set to a non-positive value (<= 0).
     #[cfg_attr(feature = "std", error("Quality factor must be positive"))]
     NonPositiveQualityFactor,
+    /// Signals when a slew limit is set to a negative value (< 0).
+    #[cfg_attr(feature = "std", error("Slew limit must be positive"))]
+    NonPositiveSlewLimit,
     /// Signals when a cutoff frequency is set to a non-finite value (NaN or infinity).
     #[cfg_attr(feature = "std", error("Cutoff frequency must be finite"))]
     NonFiniteCutoffFrequency,
@@ -72,6 +76,9 @@ pub enum Error {
     /// Signals when a quality factor is set to a non-finite value (NaN or infinity).
     #[cfg_attr(feature = "std", error("Quality factor must be finite"))]
     NonFiniteQualityFactor,
+    /// Signals when a slew limit is set to a non-finite value (NaN or infinity).
+    #[cfg_attr(feature = "std", error("Slew limit must be finite"))]
+    NonFiniteSlewLimit,
 
     /// Signals when the cutoff frequency is greater than or equal to half the sample frequency,
     /// which violates the Nyquist theorem. This situation is mathematically fatal for
