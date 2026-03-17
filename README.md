@@ -78,4 +78,4 @@ cargo run --example filter_imu_ulog -- flight_data.ulg --time-range 25 30 --cuto
 
 This generates a plot of the raw and filtered data, for example:
 
-![Example of filtering IMU data from a PX4 flight log](https://raw.githubusercontent.com/Hs293Go/air-filters/refs/heads/main/imu_filtered.png)
+![Example of filtering IMU data from a PX4 flight log](https://raw.githubusercontent.com/Hs293Go/air-filters/refs/heads/main/imu_filtered.svg)

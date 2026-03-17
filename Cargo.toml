@@ -21,5 +21,8 @@ thiserror = ["dep:thiserror"]
 
 [dev-dependencies]
 approx = "0.5.1"
-plotters = "0.3"
+plotters = { version = "0.3", default-features = false, features = [
+  "svg_backend",
+  "line_series",
+] }
 clap = { version = "4.6.0", features = ["derive"] }

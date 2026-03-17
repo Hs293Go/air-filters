@@ -70,7 +70,7 @@ struct Args {
     time_range: Vec<f64>,
 
     /// Path to save the output plot image.
-    #[arg(short, long, default_value_t = String::from("imu_filtered.png"))]
+    #[arg(short, long, default_value_t = String::from("imu_filtered.svg"))]
     save_path: String,
 }
 
@@ -179,7 +179,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    let root = BitMapBackend::new(&save_path, (800, 600)).into_drawing_area();
+    let root = SVGBackend::new(&save_path, (800, 600)).into_drawing_area();
     root.fill(&WHITE)?;
 
     let raw_color = RGBColor(180, 200, 220);
