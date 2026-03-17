@@ -46,6 +46,19 @@ pub struct BiquadFilterConfig<T: Float, P: BiquadTopology<T>> {
 }
 
 impl<T: Float, P: BiquadTopology<T>> BiquadFilterConfig<T, P> {
+    /// Creates a new `BiquadFilterConfig`, defining only the topology. The filter type defaults to
+    /// `LowPass`, and the quality factor `Q` defaults to 1.0 (ignored for `LowPass`). The cutoff
+    /// frequency and sample frequency default to 10.0 Hz and 100.0 Hz, respectively, following the
+    /// defaults of [`CommonFilterConfig`].
+    pub fn new(_topology: P) -> Self {
+        Self {
+            base_config: CommonFilterConfig::default(),
+            filter_type: BiquadFilterType::LowPass,
+            q: T::from(1.0).unwrap(),
+            _topology: PhantomData,
+        }
+    }
+
     /// Returns the cutoff frequency in Hz.
     pub fn cutoff_frequency_hz(&self) -> T {
         self.base_config.cutoff_frequency_hz
@@ -107,7 +120,12 @@ pub struct BiquadFilterConfigBuilder<T: Float, P: BiquadTopology<T>> {
 }
 
 impl<T: Float> BiquadFilterConfigBuilder<T, DirectForm1<T>> {
-    /// Creates a new builder for a biquad filter with Direct Form 1 topology.
+    /// Creates a new builder for a [`DirectForm1`] biquad filter.
+    ///
+    /// Choose DF1 when the filter's cutoff frequency or Q will be updated at runtime via
+    /// [`CommonConfigurableFilter::set_cutoff_frequency_hz`] or similar. DF1 delay elements are
+    /// raw signal samples, so coefficient changes take effect immediately without a transient
+    /// glitch.
     pub fn direct_form_1() -> Self {
         Self {
             base_config_builder: CommonFilterConfigBuilder::default(),
@@ -119,7 +137,12 @@ impl<T: Float> BiquadFilterConfigBuilder<T, DirectForm1<T>> {
 }
 
 impl<T: Float> BiquadFilterConfigBuilder<T, DirectForm2<T>> {
-    /// Creates a new builder for a biquad filter with Direct Form 2 topology.
+    /// Creates a new builder for a [`DirectForm2`] (DF2T) biquad filter.
+    ///
+    /// Choose DF2T when the filter's coefficients are not likely to change during active
+    /// operation. DF2T uses only two delay registers (vs. four for DF1), but those registers
+    /// encode history through the feedback coefficients; an in-flight coefficient change causes a
+    /// transient until the delay line flushes.
     pub fn direct_form_2() -> Self {
         Self {
             base_config_builder: CommonFilterConfigBuilder::default(),
@@ -210,6 +233,29 @@ pub struct BiquadFilterCoefficients<T: Float> {
     b2: T,
 }
 
+/// Direct Form II Transposed (DF2T) biquad topology.
+///
+/// Uses two delay elements `w[n-1]` and `w[n-2]`, where the intermediate variable
+/// `w[n]` satisfies:
+///
+/// ```text
+/// w[n]  =  x[n] − a1·w[n−1] − a2·w[n−2]
+/// y[n]  =  b0·w[n] + b1·w[n−1] + b2·w[n−2]
+/// ```
+///
+/// Because `w` is derived through the feedback coefficients `a1` and `a2`, the stored
+/// delay elements encode input history *as seen through the current coefficients* — they
+/// are not raw signal samples. Changing `a1` or `a2` between samples invalidates the
+/// stored values, causing a transient glitch until the delay line flushes (two samples).
+///
+/// Betaflight's `biquadFilterApply` (`filter.c`) uses this topology, noting:
+/// *"higher precision but can't handle changes in coefficients"*.
+///
+/// # When to use
+///
+/// Prefer DF2T for filters whose coefficients are set once at startup and never changed
+/// during operation — a fixed gyroscope low-pass filter being the canonical example.
+/// For filters that must update their cutoff or Q at runtime, use [`DirectForm1`].
 #[derive(Debug, Clone)]
 pub struct DirectForm2<T: Float> {
     x1: T,
@@ -232,6 +278,12 @@ impl<T: Float> DirectForm2<T> {
 }
 
 impl<T: Float> BiquadTopology<T> for DirectForm2<T> {
+    /// Evaluate one DF2T sample.
+    ///
+    /// `x1` and `x2` hold `w[n−1]` and `w[n−2]` — values of the intermediate variable
+    /// that depend on both the signal and the feedback coefficients. They are valid only
+    /// for the coefficient set that was active when they were last written. See the
+    /// struct-level documentation for the consequences of mid-stream coefficient changes.
     fn compute(&mut self, input: T, coeffs: &BiquadFilterCoefficients<T>) -> T {
         let result = coeffs.b0 * input + self.x1;
 
@@ -298,6 +350,32 @@ impl<T: Float> BiquadTopology<T> for DirectForm2<T> {
     }
 }
 
+/// Direct Form I (DF1) biquad topology.
+///
+/// Uses four delay elements — two past inputs (`x[n−1]`, `x[n−2]`) and two past
+/// outputs (`y[n−1]`, `y[n−2]`):
+///
+/// ```text
+/// y[n]  =  b0·x[n] + b1·x[n−1] + b2·x[n−2] − a1·y[n−1] − a2·y[n−2]
+/// ```
+///
+/// Because the delay elements store actual signal values, not an intermediate quantity
+/// derived from the coefficients, they remain valid across coefficient changes. Updating
+/// `a1`, `a2`, `b0`, `b1`, or `b2` between samples is seamless: the next call to
+/// [`BiquadFilter::apply`] evaluates the new difference equation against unchanged
+/// historical data, producing no transient artifact.
+///
+/// The cost over [`DirectForm2`] is two extra delay registers (four instead of two).
+///
+/// Betaflight's `biquadFilterApplyDF1` (`filter.c`) uses this topology for the
+/// RPM-tracking notch filter, which calls `biquadFilterUpdate` on every gyro loop
+/// iteration to track motor harmonics.
+///
+/// # When to use
+///
+/// Prefer DF1 whenever the filter's cutoff frequency or Q must be updated at runtime.
+/// For filters whose coefficients are fixed at startup, [`DirectForm2`] is sufficient
+/// and uses half the delay-line registers.
 #[derive(Debug, Clone)]
 pub struct DirectForm1<T: Float> {
     x1: T,
@@ -324,7 +402,12 @@ impl<T: Float> DirectForm1<T> {
 }
 
 impl<T: Float> BiquadTopology<T> for DirectForm1<T> {
-    /// Compute the output of the DF1 biquad filter for the given input and coefficients, while updating the internal state.
+    /// Evaluate one DF1 sample.
+    ///
+    /// `x1`, `x2` hold past input samples; `y1`, `y2` hold past output samples. All
+    /// four are raw signal values independent of the coefficients, so a coefficient
+    /// change between calls introduces no transient — the new coefficients are simply
+    /// applied to the existing historical samples on the next evaluation.
     fn compute(&mut self, input: T, coeffs: &BiquadFilterCoefficients<T>) -> T {
         let result = coeffs.b0 * input + coeffs.b1 * self.x1 + coeffs.b2 * self.x2
             - coeffs.a1 * self.y1
