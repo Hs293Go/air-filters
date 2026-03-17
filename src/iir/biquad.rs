@@ -18,47 +18,40 @@ pub enum BiquadFilterType {
     BandPass,
 }
 
-/// Defines the topology of the biquad filter and manages the internal states.
-pub trait BiquadTopology<T: Float>: Default {
-    /// Compute the output of the filter for the given input and coefficients, while updating the internal state.
-    fn compute(&mut self, input: T, coeffs: &BiquadFilterCoefficients<T>) -> T;
+mod internal {
+    use super::*;
+    #[derive(Debug, Clone)]
+    pub struct BiquadFilterCoefficients<T: Float> {
+        pub a1: T,
+        pub a2: T,
+        pub b0: T,
+        pub b1: T,
+        pub b2: T,
+    }
 
-    /// Reset the topology's internal delay-line to the steady-state corresponding
-    /// to constant output `state`.
-    ///
-    /// Coefficients are supplied because the correct initial state depends on the
-    /// filter's transfer function (topology alone does not know it).
-    fn reset(&mut self, state: T, coeffs: &BiquadFilterCoefficients<T>) -> Result<(), Error>;
+    /// Defines the topology of the biquad filter and manages the internal states.
+    pub trait BiquadTopology<T: Float>: Default {
+        /// Compute the output of the filter for the given input and coefficients, while updating the internal state.
+        fn compute(&mut self, input: T, coeffs: &BiquadFilterCoefficients<T>) -> T;
 
-    /// Returns the latest input sample.
-    fn input(&self) -> T;
-
-    /// Returns the previous input sample (the one before the latest).
-    fn prev_input(&self) -> T;
+        /// Reset the topology's internal delay-line to the steady-state corresponding
+        /// to constant output `state`.
+        ///
+        /// Coefficients are supplied because the correct initial state depends on the
+        /// filter's transfer function (topology alone does not know it).
+        fn reset(&mut self, state: T, coeffs: &BiquadFilterCoefficients<T>) -> Result<(), Error>;
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
-pub struct BiquadFilterConfig<T: Float, P: BiquadTopology<T>> {
+pub struct BiquadFilterConfig<T: Float, P: internal::BiquadTopology<T>> {
     base_config: CommonFilterConfig<T>,
     filter_type: BiquadFilterType,
     q: T,
     _topology: PhantomData<P>,
 }
 
-impl<T: Float, P: BiquadTopology<T>> BiquadFilterConfig<T, P> {
-    /// Creates a new `BiquadFilterConfig`, defining only the topology. The filter type defaults to
-    /// `LowPass`, and the quality factor `Q` defaults to 1.0 (ignored for `LowPass`). The cutoff
-    /// frequency and sample frequency default to 10.0 Hz and 100.0 Hz, respectively, following the
-    /// defaults of [`CommonFilterConfig`].
-    pub fn new(_topology: P) -> Self {
-        Self {
-            base_config: CommonFilterConfig::default(),
-            filter_type: BiquadFilterType::LowPass,
-            q: T::from(1.0).unwrap(),
-            _topology: PhantomData,
-        }
-    }
-
+impl<T: Float, P: internal::BiquadTopology<T>> BiquadFilterConfig<T, P> {
     /// Returns the cutoff frequency in Hz.
     pub fn cutoff_frequency_hz(&self) -> T {
         self.base_config.cutoff_frequency_hz
@@ -112,7 +105,7 @@ impl<T: Float, P: BiquadTopology<T>> BiquadFilterConfig<T, P> {
 
 /// Builder for constructing a [`BiquadFilterConfig`] with a defined the [`BiquadTopology`]
 #[derive(Debug, Copy, Clone)]
-pub struct BiquadFilterConfigBuilder<T: Float, P: BiquadTopology<T>> {
+pub struct BiquadFilterConfigBuilder<T: Float, P: internal::BiquadTopology<T>> {
     base_config_builder: CommonFilterConfigBuilder<T>,
     filter_type: Option<BiquadFilterType>,
     q: Option<T>,
@@ -153,7 +146,7 @@ impl<T: Float> BiquadFilterConfigBuilder<T, DirectForm2<T>> {
     }
 }
 
-impl<T: Float + FloatConst, P: BiquadTopology<T>> BiquadFilterConfigBuilder<T, P> {
+impl<T: Float + FloatConst, P: internal::BiquadTopology<T>> BiquadFilterConfigBuilder<T, P> {
     /// Configures the cutoff frequency in Hz.
     pub fn cutoff_frequency_hz(mut self, cutoff_frequency_hz: T) -> Self {
         self.base_config_builder = self
@@ -224,15 +217,6 @@ impl<T: Float + FloatConst, P: BiquadTopology<T>> BiquadFilterConfigBuilder<T, P
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct BiquadFilterCoefficients<T: Float> {
-    a1: T,
-    a2: T,
-    b0: T,
-    b1: T,
-    b2: T,
-}
-
 /// Direct Form II Transposed (DF2T) biquad topology.
 ///
 /// Uses two delay elements `w[n-1]` and `w[n-2]`, where the intermediate variable
@@ -277,14 +261,14 @@ impl<T: Float> DirectForm2<T> {
     }
 }
 
-impl<T: Float> BiquadTopology<T> for DirectForm2<T> {
+impl<T: Float> internal::BiquadTopology<T> for DirectForm2<T> {
     /// Evaluate one DF2T sample.
     ///
     /// `x1` and `x2` hold `w[n−1]` and `w[n−2]` — values of the intermediate variable
     /// that depend on both the signal and the feedback coefficients. They are valid only
     /// for the coefficient set that was active when they were last written. See the
     /// struct-level documentation for the consequences of mid-stream coefficient changes.
-    fn compute(&mut self, input: T, coeffs: &BiquadFilterCoefficients<T>) -> T {
+    fn compute(&mut self, input: T, coeffs: &internal::BiquadFilterCoefficients<T>) -> T {
         let result = coeffs.b0 * input + self.x1;
 
         self.x1 = coeffs.b1 * input - coeffs.a1 * result + self.x2;
@@ -319,7 +303,11 @@ impl<T: Float> BiquadTopology<T> for DirectForm2<T> {
     /// constant input produces a nonzero constant output.  Resetting to a
     /// nonzero `state` is therefore undefined; the delay line is zeroed and
     /// `Ok(())` is returned.
-    fn reset(&mut self, state: T, coeffs: &BiquadFilterCoefficients<T>) -> Result<(), Error> {
+    fn reset(
+        &mut self,
+        state: T,
+        coeffs: &internal::BiquadFilterCoefficients<T>,
+    ) -> Result<(), Error> {
         if !state.is_finite() {
             return Err(Error::NonFiniteState);
         }
@@ -341,13 +329,6 @@ impl<T: Float> BiquadTopology<T> for DirectForm2<T> {
         Ok(())
     }
 
-    fn input(&self) -> T {
-        self.x1
-    }
-
-    fn prev_input(&self) -> T {
-        self.x2
-    }
 }
 
 /// Direct Form I (DF1) biquad topology.
@@ -401,14 +382,14 @@ impl<T: Float> DirectForm1<T> {
     }
 }
 
-impl<T: Float> BiquadTopology<T> for DirectForm1<T> {
+impl<T: Float> internal::BiquadTopology<T> for DirectForm1<T> {
     /// Evaluate one DF1 sample.
     ///
     /// `x1`, `x2` hold past input samples; `y1`, `y2` hold past output samples. All
     /// four are raw signal values independent of the coefficients, so a coefficient
     /// change between calls introduces no transient — the new coefficients are simply
     /// applied to the existing historical samples on the next evaluation.
-    fn compute(&mut self, input: T, coeffs: &BiquadFilterCoefficients<T>) -> T {
+    fn compute(&mut self, input: T, coeffs: &internal::BiquadFilterCoefficients<T>) -> T {
         let result = coeffs.b0 * input + coeffs.b1 * self.x1 + coeffs.b2 * self.x2
             - coeffs.a1 * self.y1
             - coeffs.a2 * self.y2;
@@ -430,7 +411,11 @@ impl<T: Float> BiquadTopology<T> for DirectForm1<T> {
     /// yields output `state`.  Coefficients are accepted but unused; DF1 state
     /// initialisation does not require them because the delay elements directly
     /// represent past inputs and outputs.
-    fn reset(&mut self, state: T, _coeffs: &BiquadFilterCoefficients<T>) -> Result<(), Error> {
+    fn reset(
+        &mut self,
+        state: T,
+        _coeffs: &internal::BiquadFilterCoefficients<T>,
+    ) -> Result<(), Error> {
         if !state.is_finite() {
             return Err(Error::NonFiniteState);
         }
@@ -441,24 +426,17 @@ impl<T: Float> BiquadTopology<T> for DirectForm1<T> {
         Ok(())
     }
 
-    fn input(&self) -> T {
-        self.x1
-    }
-
-    fn prev_input(&self) -> T {
-        self.x2
-    }
 }
 
 #[derive(Debug, Clone)]
-pub struct BiquadFilter<T: Float, P: BiquadTopology<T>> {
-    coeffs: BiquadFilterCoefficients<T>,
+pub struct BiquadFilter<T: Float, P: internal::BiquadTopology<T>> {
+    coeffs: internal::BiquadFilterCoefficients<T>,
     topology: P,
     config: BiquadFilterConfig<T, P>,
 }
 
-impl<T: Float + FloatConst, P: BiquadTopology<T>> BiquadFilter<T, P> {
-    fn compute_coeffs(config: &BiquadFilterConfig<T, P>) -> BiquadFilterCoefficients<T> {
+impl<T: Float + FloatConst, P: internal::BiquadTopology<T>> BiquadFilter<T, P> {
+    fn compute_coeffs(config: &BiquadFilterConfig<T, P>) -> internal::BiquadFilterCoefficients<T> {
         let CommonFilterConfig {
             cutoff_frequency_hz,
             sample_frequency_hz,
@@ -473,7 +451,7 @@ impl<T: Float + FloatConst, P: BiquadTopology<T>> BiquadFilter<T, P> {
         let quality_factor = config.q;
 
         let alpha = sn / (t!(2) * quality_factor);
-        let mut coeffs = BiquadFilterCoefficients {
+        let mut coeffs = internal::BiquadFilterCoefficients {
             a1: t!(0),
             a2: t!(0),
             b0: t!(0),
@@ -523,14 +501,11 @@ impl<T: Float + FloatConst, P: BiquadTopology<T>> BiquadFilter<T, P> {
             config,
         }
     }
-
-    /// Returns the latest input to the filter.
-    pub fn input(&self) -> T {
-        self.topology.input()
-    }
 }
 
-impl<T: Float + FloatConst, P: BiquadTopology<T>> ConfigurableFilter<T> for BiquadFilter<T, P> {
+impl<T: Float + FloatConst, P: internal::BiquadTopology<T>> ConfigurableFilter<T>
+    for BiquadFilter<T, P>
+{
     fn update_configuration(&mut self) -> Result<(), Error> {
         // Recompute coefficients based on the current config
         if self.config.cutoff_frequency_hz()
@@ -544,7 +519,7 @@ impl<T: Float + FloatConst, P: BiquadTopology<T>> ConfigurableFilter<T> for Biqu
     }
 }
 
-impl<T: Float + FloatConst, P: BiquadTopology<T>> CommonConfigurableFilter<T>
+impl<T: Float + FloatConst, P: internal::BiquadTopology<T>> CommonConfigurableFilter<T>
     for BiquadFilter<T, P>
 {
     /// Sets the cutoff frequency, in Hz, of the filter. Defers to
@@ -589,7 +564,7 @@ impl<T: Float + FloatConst, P: BiquadTopology<T>> CommonConfigurableFilter<T>
     }
 }
 
-impl<T: Float, P: BiquadTopology<T>> Filter<T> for BiquadFilter<T, P> {
+impl<T: Float, P: internal::BiquadTopology<T>> Filter<T> for BiquadFilter<T, P> {
     fn apply(&mut self, input: T) -> T {
         self.topology.compute(input, &self.coeffs)
     }
