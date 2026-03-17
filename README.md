@@ -67,3 +67,15 @@ fn main() {
     println!("Response: {output}");
 }
 ```
+
+The filters can be demonstrated by running `filter_imu_ulog` on IMU data in a
+PX4 flight log. An example command to filter the gyroscope data between 25 and
+30 seconds with a cutoff frequency of 60 Hz is:
+
+```bash
+cargo run --example filter_imu_ulog -- flight_data.ulg --time-range 25 30 --cutoff-hz 60 --data-type gyro
+```
+
+This generates a plot of the raw and filtered data, for example:
+
+![Example of filtering IMU data from a PX4 flight log](https://raw.githubusercontent.com/Hs293Go/air-filters/refs/heads/main/imu_filtered.png)

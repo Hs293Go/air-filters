@@ -20,3 +20,5 @@ thiserror = ["dep:thiserror"]
 
 [dev-dependencies]
 approx = "0.5.1"
+plotters = "0.3"
+clap = { version = "4.6.0", features = ["derive"] }
