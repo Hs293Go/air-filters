@@ -1,5 +1,9 @@
 # air-filters
 
+[![Rust CI & Publish](https://github.com/Hs293Go/air-filters/actions/workflows/rust.yml/badge.svg)](https://github.com/Hs293Go/air-filters/actions/workflows/rust.yml)
+[![Crates.io](https://img.shields.io/crates/v/air-filters.svg)](https://crates.io/crates/air-filters)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 Common digital **filters** for Unmanned **Aerial** Vehicles (UAVs) inspired by
 [`betaflight`](https://github.com/betaflight/betaflight.git).
 

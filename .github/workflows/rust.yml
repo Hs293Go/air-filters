@@ -5,9 +5,12 @@ on:
     branches: ["main"]
     # Trigger the publish job when pushing a version tag, e.g., `git tag v0.1.0 && git push origin v0.1.0`
     tags: ["v*"]
+    paths-ignore:
+      - "**.md"
   pull_request:
     branches: ["main"]
-
+    paths-ignore:
+      - "**.md"
 env:
   CARGO_TERM_COLOR: always
 
