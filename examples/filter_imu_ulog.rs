@@ -151,8 +151,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Vec::with_capacity(n),
     ];
     for i in 0..n {
-        for axis in 0..3 {
-            bq_out[axis].push(bq[axis].apply(raw[axis][i]));
+        let sample: [f64; 3] = core::array::from_fn(|axis| raw[axis][i]);
+        // Demonstrate ND-sample filtering; One "apply" call processes all 3 axes at once with
+        // their corresponding filter states
+        let filtered = bq.apply(sample);
+        for (axis, data) in filtered.iter().enumerate() {
+            bq_out[axis].push(*data);
         }
     }
 

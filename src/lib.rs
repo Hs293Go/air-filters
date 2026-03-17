@@ -21,6 +21,12 @@
 
 #![no_std]
 
+#[cfg(feature = "alloc")]
+extern crate alloc;
+
+#[cfg(feature = "alloc")]
+use alloc::boxed::Box;
+
 #[macro_use]
 mod macros;
 
@@ -56,14 +62,63 @@ pub enum Error {
     NonFiniteState,
 }
 
-/// Trait representing a generic filter that can be applied to input samples of any type that
-/// implements the `Float` trait and stores internal state.
-pub trait Filter<T: Float> {
+/// Trait representing a generic filter that can be applied to input samples and stores internal state.
+pub trait Filter<T> {
     /// Applies the filter to the input sample and updates the internal state. The output is the new state.
     fn apply(&mut self, input: T) -> T;
 
     /// Resets the filter state to the specified value. Returns an error if the state is not finite.
     fn reset(&mut self, state: T) -> Result<(), Error>;
+}
+
+impl<F, T, const N: usize> Filter<[T; N]> for [F; N]
+where
+    F: Filter<T>,
+    T: Float,
+{
+    fn apply(&mut self, input: [T; N]) -> [T; N] {
+        core::array::from_fn(|i| self[i].apply(input[i]))
+    }
+
+    fn reset(&mut self, state: [T; N]) -> Result<(), Error> {
+        for (f, s) in self.iter_mut().zip(state) {
+            f.reset(s)?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "alloc")]
+impl<T: Float> Filter<T> for Box<dyn Filter<T>> {
+    fn apply(&mut self, input: T) -> T {
+        (**self).apply(input)
+    }
+
+    fn reset(&mut self, state: T) -> Result<(), Error> {
+        (**self).reset(state)
+    }
+}
+
+#[cfg(feature = "alloc")]
+impl<T: Float> Filter<T> for Box<dyn Filter<T> + Send> {
+    fn apply(&mut self, input: T) -> T {
+        (**self).apply(input)
+    }
+
+    fn reset(&mut self, state: T) -> Result<(), Error> {
+        (**self).reset(state)
+    }
+}
+
+#[cfg(feature = "alloc")]
+impl<T: Float> Filter<T> for Box<dyn Filter<T> + Send + Sync> {
+    fn apply(&mut self, input: T) -> T {
+        (**self).apply(input)
+    }
+
+    fn reset(&mut self, state: T) -> Result<(), Error> {
+        (**self).reset(state)
+    }
 }
 
 mod internal {
@@ -264,6 +319,99 @@ impl<T: Float> TryFrom<CommonFilterConfigBuilder<T>> for CommonFilterConfig<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Minimal pass-through filter: `apply` returns its input unchanged and
+    /// stores it as state. Isolates blanket-impl tests from any concrete
+    /// filter's arithmetic.
+    struct Mock<T> {
+        state: T,
+    }
+
+    impl<T: Float> Mock<T> {
+        fn new() -> Self {
+            Self { state: T::zero() }
+        }
+    }
+
+    impl<T: Float> Filter<T> for Mock<T> {
+        fn apply(&mut self, input: T) -> T {
+            self.state = input;
+            self.state
+        }
+
+        fn reset(&mut self, state: T) -> Result<(), Error> {
+            if !state.is_finite() {
+                return Err(Error::NonFiniteState);
+            }
+            self.state = state;
+            Ok(())
+        }
+    }
+
+    // ── ND filtering blanket impl ─────────────────────────────────────────────
+
+    /// Axis i of the output equals the input applied to filter i.
+    /// With pass-through semantics the expected output is trivially the input
+    /// itself, so no filter arithmetic is needed to write the assertion.
+    #[test]
+    fn nd_apply_dispatches_per_axis() {
+        let mut filters: [Mock<f64>; 3] = core::array::from_fn(|_| Mock::new());
+
+        let out = filters.apply([1.0, 2.0, 3.0]);
+        assert_eq!(out, [1.0, 2.0, 3.0]);
+
+        // State of each filter reflects only its own axis.
+        assert_eq!(filters[0].state, 1.0);
+        assert_eq!(filters[1].state, 2.0);
+        assert_eq!(filters[2].state, 3.0);
+    }
+
+    /// Inputs to one axis must not alter the state of any other axis.
+    #[test]
+    fn nd_apply_axes_are_independent() {
+        let mut filters: [Mock<f64>; 3] = core::array::from_fn(|_| Mock::new());
+
+        filters.apply([99.0, 0.0, 0.0]);
+
+        assert_eq!(filters[1].state, 0.0, "axis 1 contaminated by axis 0");
+        assert_eq!(filters[2].state, 0.0, "axis 2 contaminated by axis 0");
+    }
+
+    /// A successful vector reset writes each target state to its axis.
+    #[test]
+    fn nd_reset_distributes_to_all_axes() {
+        let mut filters: [Mock<f64>; 3] = core::array::from_fn(|_| Mock::new());
+
+        filters.reset([10.0, -20.0, 0.5]).unwrap();
+
+        assert_eq!(filters[0].state, 10.0);
+        assert_eq!(filters[1].state, -20.0);
+        assert_eq!(filters[2].state, 0.5);
+    }
+
+    /// When reset fails on axis k, axes 0..k are mutated and axes k..N are not.
+    /// This documents the known partial-mutation behaviour of the early-return
+    /// in `Filter<[T; N]>::reset`.
+    #[test]
+    fn nd_reset_partial_failure_leaves_earlier_axes_mutated() {
+        let mut filters: [Mock<f64>; 3] = core::array::from_fn(|_| Mock::new());
+        filters.apply([1.0, 2.0, 3.0]);
+
+        // Axis 0 valid, axis 1 NaN (fails), axis 2 never reached.
+        let err = filters.reset([0.0, f64::NAN, 99.0]).unwrap_err();
+        assert_eq!(err, Error::NonFiniteState);
+
+        assert_eq!(filters[0].state, 0.0, "axis 0 should have been reset");
+        assert_eq!(filters[1].state, 2.0, "axis 1 should be unchanged");
+        assert_eq!(filters[2].state, 3.0, "axis 2 should be unchanged");
+    }
+
+    /// The blanket works for N = 1 (degenerate case).
+    #[test]
+    fn nd_apply_n1_works() {
+        let mut filters: [Mock<f64>; 1] = [Mock::new()];
+        assert_eq!(filters.apply([7.0]), [7.0]);
+    }
 
     #[test]
     fn test_common_filter_configuration_builder() -> Result<(), Error> {

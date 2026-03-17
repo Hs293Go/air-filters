@@ -14,7 +14,8 @@ thiserror = { version = "2.0.18", optional = true }
 
 [features]
 default = ["std"]
-std = ["num-traits/std", "dep:thiserror"]
+std = ["alloc", "num-traits/std", "dep:thiserror"]
+alloc = []
 libm = ["num-traits/libm"]
 thiserror = ["dep:thiserror"]
 
