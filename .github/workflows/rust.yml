@@ -21,14 +21,31 @@ jobs:
     strategy:
       matrix:
         include:
-          - name: no_std (thumbv7em)
-            target: thumbv7em-none-eabihf
-            features: "libm"
-            no_run: true
-          - name: std (host)
+          - name: std (x86_64)
             target: x86_64-unknown-linux-gnu
             features: "std"
+            cache-key: std-x86_64
             no_run: false
+          - name: no_std + libm (x86_64)
+            target: x86_64-unknown-linux-gnu
+            features: "libm"
+            cache-key: nostd-libm-x86_64
+            no_run: false
+          - name: no_std no libm (x86_64)
+            target: x86_64-unknown-linux-gnu
+            features: ""
+            cache-key: nostd-nolibm-x86_64
+            no_run: false
+          - name: no_std + libm (thumbv7em)
+            target: thumbv7em-none-eabihf
+            features: "libm"
+            cache-key: nostd-libm-thumbv7em
+            no_run: true
+          - name: no_std no libm (thumbv7em)
+            target: thumbv7em-none-eabihf
+            features: ""
+            cache-key: nostd-nolibm-thumbv7em
+            no_run: true
 
     steps:
       - uses: actions/checkout@v4
@@ -49,7 +66,7 @@ jobs:
             ~/.cargo/git/db/
             target/
           key:
-            ${{ runner.os }}-cargo-${{ matrix.name }}-${{
+            ${{ runner.os }}-cargo-${{ matrix.cache-key }}-${{
             hashFiles('**/Cargo.lock') }}
 
       - name: Check (Clippy)
@@ -64,7 +81,8 @@ jobs:
 
       - name: Run Tests
         if: ${{ !matrix.no_run }}
-        run: cargo test --features "${{ matrix.features }}"
+        run:
+          cargo test --no-default-features --features "${{ matrix.features }}"
 
   publish:
     name: Publish Crate
