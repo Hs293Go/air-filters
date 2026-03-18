@@ -295,7 +295,7 @@ impl<T: Float> CommonFilterConfig<T> {
 }
 
 /// Builder for [`CommonFilterConfig`] that allows for flexible construction with validation.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub struct CommonFilterConfigBuilder<T: Float> {
     cutoff_frequency_hz: Option<T>,
     sample_frequency_hz: Option<T>,

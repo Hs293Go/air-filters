@@ -230,7 +230,7 @@ impl<T: Float + FloatConst, P: internal::BiquadTopology<T>> BiquadFilterConfig<T
 }
 
 /// Builder for constructing a [`BiquadFilterConfig`] with either [`DirectForm1`] or [`DirectForm2`] topology.
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Clone)]
 pub struct BiquadFilterConfigBuilder<T: Float, P: internal::BiquadTopology<T>> {
     base_config_builder: CommonFilterConfigBuilder<T>,
     filter_type: Option<BiquadFilterType>,
