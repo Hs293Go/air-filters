@@ -51,6 +51,50 @@ pub struct BiquadFilterConfig<T: Float, P: internal::BiquadTopology<T>> {
     _topology: PhantomData<P>,
 }
 
+impl<T: Float + FloatConst> Default for BiquadFilterConfig<T, DirectForm1<T>> {
+    /// Returns a default configuration for a biquad filter with [`DirectForm1`] topology, with
+    /// cutoff frequency and sample frequency following [`CommonFilterConfig::default`] and filter
+    /// type set to LowPass with Q fixed to 1/sqrt(2) for a Butterworth response.
+    fn default() -> Self {
+        Self {
+            base_config: CommonFilterConfig::default(),
+            filter_type: BiquadFilterType::LowPass,
+            q: T::FRAC_1_SQRT_2(),
+            _topology: PhantomData,
+        }
+    }
+}
+
+impl<T: Float + FloatConst> Default for BiquadFilterConfig<T, DirectForm2<T>> {
+    /// Returns a default configuration for a biquad filter with [`DirectForm2`] topology, with
+    /// cutoff frequency and sample frequency following [`CommonFilterConfig::default`] and filter
+    /// type set to LowPass with Q fixed to 1/sqrt(2) for a Butterworth response.
+    fn default() -> Self {
+        Self {
+            base_config: CommonFilterConfig::default(),
+            filter_type: BiquadFilterType::LowPass,
+            q: T::FRAC_1_SQRT_2(),
+            _topology: PhantomData,
+        }
+    }
+}
+
+impl<T: Float + FloatConst> BiquadFilterConfig<T, DirectForm1<T>> {
+    /// Creates a new `BiquadFilterConfig` with [`DirectForm1`] topology with default parameters
+    /// following [`BiquadFilterConfig::default`].
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl<T: Float + FloatConst> BiquadFilterConfig<T, DirectForm2<T>> {
+    /// Creates a new `BiquadFilterConfig` with [`DirectForm2`] topology with default parameters
+    /// following [`BiquadFilterConfig::default`].
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
 impl<T: Float, P: internal::BiquadTopology<T>> BiquadFilterConfig<T, P> {
     /// Returns the cutoff frequency in Hz.
     pub fn cutoff_frequency_hz(&self) -> T {
