@@ -95,7 +95,7 @@ impl<T: Float + FloatConst> BiquadFilterConfig<T, DirectForm2<T>> {
     }
 }
 
-impl<T: Float, P: internal::BiquadTopology<T>> BiquadFilterConfig<T, P> {
+impl<T: Float + FloatConst, P: internal::BiquadTopology<T>> BiquadFilterConfig<T, P> {
     /// Returns the cutoff frequency in Hz.
     pub fn cutoff_frequency_hz(&self) -> T {
         self.base_config.cutoff_frequency_hz
@@ -144,6 +144,35 @@ impl<T: Float, P: internal::BiquadTopology<T>> BiquadFilterConfig<T, P> {
         let sample_frequency_hz = T::from(sample_loop_time.as_secs_f64().recip())
             .unwrap_or_else(|| unreachable!("f64 is always representable in T: Float"));
         self.set_sample_frequency_hz(sample_frequency_hz)
+    }
+
+    /// Sets the filter type (LowPass, Notch, BandPass). If the filter type is set to LowPass, the
+    /// quality factor `Q` is overridden to 1/sqrt(2) for a Butterworth response.
+    pub fn set_filter_type(&mut self, filter_type: BiquadFilterType) {
+        self.filter_type = filter_type;
+        if let BiquadFilterType::LowPass = filter_type {
+            self.q = T::FRAC_1_SQRT_2();
+        }
+    }
+
+    /// Sets the quality factor `Q`, which controls the filter's bandwidth and resonance. Must be
+    /// positive and finite. For low-pass filters, this value is ignored and overridden to 1/sqrt(2)
+    /// for a Butterworth response.
+    pub fn set_quality_factor(&mut self, q: T) -> Result<(), Error> {
+        if !q.is_finite() {
+            return Err(Error::NonFiniteQualityFactor);
+        }
+
+        if q <= t!(0) {
+            return Err(Error::NonPositiveQualityFactor);
+        }
+
+        self.q = if let BiquadFilterType::LowPass = self.filter_type {
+            T::FRAC_1_SQRT_2()
+        } else {
+            q
+        };
+        Ok(())
     }
 }
 
