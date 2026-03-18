@@ -55,6 +55,10 @@ where
         self.k = Self::compute_gain(&self.config);
         Ok(())
     }
+
+    fn config_mut(&mut self) -> &mut CommonFilterConfig<T> {
+        &mut self.config
+    }
 }
 
 impl<T: Float + FloatConst> CommonConfigurableFilter<T> for Pt3Filter<T>
@@ -63,10 +67,6 @@ where
 {
     fn config(&self) -> &CommonFilterConfig<T> {
         &self.config
-    }
-
-    fn config_mut(&mut self) -> &mut CommonFilterConfig<T> {
-        &mut self.config
     }
 }
 

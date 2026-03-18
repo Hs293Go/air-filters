@@ -122,16 +122,17 @@ impl<T: Float> Filter<T> for Box<dyn Filter<T> + Send + Sync> {
 }
 
 mod internal {
-    use super::Float;
+    use super::*;
+
     pub trait ConfigurableFilter<T: Float> {
+        fn config_mut(&mut self) -> &mut CommonFilterConfig<T>;
+
         fn update_configuration(&mut self) -> Result<(), super::Error>;
     }
 }
 
 pub trait CommonConfigurableFilter<T: Float>: Filter<T> + internal::ConfigurableFilter<T> {
     fn config(&self) -> &CommonFilterConfig<T>;
-
-    fn config_mut(&mut self) -> &mut CommonFilterConfig<T>;
 
     /// Sets the cutoff frequency, in Hz, of the filter by deferring to
     /// [`CommonFilterConfig::cutoff_frequency_hz`] of the internal configuration object, then

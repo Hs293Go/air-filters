@@ -517,6 +517,10 @@ impl<T: Float + FloatConst, P: internal::BiquadTopology<T>> ConfigurableFilter<T
         self.coeffs = Self::compute_coeffs(&self.config);
         Ok(())
     }
+
+    fn config_mut(&mut self) -> &mut CommonFilterConfig<T> {
+        &mut self.config.base_config
+    }
 }
 
 impl<T: Float + FloatConst, P: internal::BiquadTopology<T>> CommonConfigurableFilter<T>
@@ -552,15 +556,6 @@ impl<T: Float + FloatConst, P: internal::BiquadTopology<T>> CommonConfigurableFi
     /// Returns the internal configuration of the filter.
     fn config(&self) -> &CommonFilterConfig<T> {
         &self.config.base_config
-    }
-
-    /// Returns a mutable reference to the internal configuration of the filter. Modifying the
-    /// configuration directly does not automatically update the filter coefficients; after making
-    /// changes, you must call [`BiquadFilter::update_configuration`] to apply the changes and
-    /// recompute the coefficients. Returns a mutable reference to the internal configuration of
-    /// the filter.
-    fn config_mut(&mut self) -> &mut CommonFilterConfig<T> {
-        &mut self.config.base_config
     }
 }
 
