@@ -9,7 +9,9 @@ Common digital **filters** for Unmanned **Aerial** Vehicles (UAVs) inspired by
 
 The following filters are implemented:
 
-- **PT1**: A first-order low-pass filter for general use
+- **PT1**: A first-order low-pass filter for general use, also equivalent to a
+  exponential moving average (EMA) filter, useful for smoothing noisy signals
+  with minimal phase lag.
 - **PT2**: A second-order low-pass filter composed of two cascaded PT1 filters,
   attenuates high-frequency noise more effectively than PT1, while introducing
   less phase lag than PT3.

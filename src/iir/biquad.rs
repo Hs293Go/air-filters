@@ -1,3 +1,49 @@
+//! Biquad filters with support for low-pass, notch, and band-pass types, and both Direct Form 1 and
+//! Direct Form 2 Transposed topologies.
+//!
+//! Topology is encoded in the type of the filter and its configuration, allowing compile-time
+//! selection of the difference equation and state storage.
+//!
+//! # Example
+//!
+//! [`BiquadFilterConfigBuilder`] offers a way to construct a [`BiquadFilter`] with a readable builder
+//! pattern. After construction, usage is as simple a call to [`BiquadFilter::apply`] for each sample.
+//!
+//! ``` rust
+//! use air_filters::iir::biquad::{BiquadFilter, BiquadFilterConfigBuilder, BiquadFilterType};
+//! use air_filters::Filter;
+//!
+//! let mut filter = BiquadFilter::new(
+//!     BiquadFilterConfigBuilder::direct_form_1()
+//!         .cutoff_frequency_hz(50.0)
+//!         .sample_frequency_hz(1000.0)
+//!         .filter_type(BiquadFilterType::Notch)
+//!         .q(5.0)
+//!         .build()
+//!         .unwrap(),
+//! );
+//!
+//! let output = filter.apply(1.0);
+//! ```
+//!
+//! Users perferring a stateful workflow can also directly construct the config object for their
+//! desired topology
+//!
+//! ``` rust
+//! use air_filters::iir::biquad::{BiquadFilterType, DF1BiquadFilter, DF1BiquadFilterConfig};
+//! use air_filters::Filter;
+//!
+//! let mut config = DF1BiquadFilterConfig::new();
+//!
+//! // Setters return a Result to allow for validation (e.g. Nyquist enforcement), doesn't mutate
+//! // the config if validation fails.
+//! assert!(config.set_cutoff_frequency_hz(30.0).is_ok());
+//! config.set_filter_type(BiquadFilterType::BandPass);
+//! let mut filter = DF1BiquadFilter::new(config);
+//!
+//! let output = filter.apply(1.0);
+//! ```
+
 use core::{marker::PhantomData, time::Duration};
 
 use crate::{
@@ -7,14 +53,18 @@ use crate::{
 use num_traits::{Float, FloatConst};
 
 /// Supported biquad filter types. Each type corresponds to a specific transfer function and frequency response:
-/// - `LowPass`: Attenuates frequencies above the cutoff. This variant is a 2nd-order Butterworth
-///   filter, fixing the quality factor as 1/sqrt(2) for maximally flat passpand
-/// - `Notch`: Attenuates frequencies around the cutoff
-/// - `BandPass`: Attenuates frequencies far from the cutoff
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum BiquadFilterType {
+    /// Attenuates frequencies above the cutoff. This variant is a 2nd-order Butterworth filter,
+    /// fixing the quality factor as 1/sqrt(2) for maximally flat passband.
     LowPass,
+
+    /// Attenuates frequencies around the cutoff, passing frequencies both above and below. The
+    /// bandwidth of the notch is controlled by the quality factor `Q`. For dynamic notch filters,
+    /// [`DirectForm1`] topology is recommended to avoid transients during coefficient updates.
     Notch,
+
+    /// Attenuates frequencies far from the cutoff
     BandPass,
 }
 
@@ -43,6 +93,9 @@ mod internal {
     }
 }
 
+/// Configuration for a biquad filter, holding both common parameters (cutoff frequency, sample
+/// frequency) and biquad-specific parameters (filter type, Q). The filter topology is encoded
+/// in the type parameter `P`.
 #[derive(Debug, Copy, Clone)]
 pub struct BiquadFilterConfig<T: Float, P: internal::BiquadTopology<T>> {
     base_config: CommonFilterConfig<T>,
@@ -176,7 +229,7 @@ impl<T: Float + FloatConst, P: internal::BiquadTopology<T>> BiquadFilterConfig<T
     }
 }
 
-/// Builder for constructing a [`BiquadFilterConfig`] with a defined the [`BiquadTopology`]
+/// Builder for constructing a [`BiquadFilterConfig`] with either [`DirectForm1`] or [`DirectForm2`] topology.
 #[derive(Debug, Copy, Clone)]
 pub struct BiquadFilterConfigBuilder<T: Float, P: internal::BiquadTopology<T>> {
     base_config_builder: CommonFilterConfigBuilder<T>,
@@ -290,7 +343,13 @@ impl<T: Float + FloatConst, P: internal::BiquadTopology<T>> BiquadFilterConfigBu
     }
 }
 
-/// Direct Form II Transposed (DF2T) biquad topology.
+/// Marker for the Direct Form II Transposed (DF2T) biquad topology.
+///
+/// Users likely don't need to interact with this type directly; see the type aliases
+/// [`DF2BiquadFilterConfig`] and [`DF2BiquadFilter`] for convenient wrappers, or
+/// [`BiquadFilterConfigBuilder::direct_form_2`] to select this topology when building a config.
+///
+/// # Details
 ///
 /// Uses two delay elements `w[n-1]` and `w[n-2]`, where the intermediate variable
 /// `w[n]` satisfies:
@@ -305,10 +364,10 @@ impl<T: Float + FloatConst, P: internal::BiquadTopology<T>> BiquadFilterConfigBu
 /// are not raw signal samples. Changing `a1` or `a2` between samples invalidates the
 /// stored values, causing a transient glitch until the delay line flushes (two samples).
 ///
+/// # Applications
+///
 /// Betaflight's `biquadFilterApply` (`filter.c`) uses this topology, noting:
 /// *"higher precision but can't handle changes in coefficients"*.
-///
-/// # When to use
 ///
 /// Prefer DF2T for filters whose coefficients are set once at startup and never changed
 /// during operation — a fixed gyroscope low-pass filter being the canonical example.
@@ -325,12 +384,6 @@ impl<T: Float> Default for DirectForm2<T> {
             x1: t!(0),
             x2: t!(0),
         }
-    }
-}
-
-impl<T: Float> DirectForm2<T> {
-    pub fn new() -> Self {
-        Self::default()
     }
 }
 
@@ -401,10 +454,28 @@ impl<T: Float> internal::BiquadTopology<T> for DirectForm2<T> {
         self.x2 = coeffs.b2 * u - coeffs.a2 * state;
         Ok(())
     }
-
 }
 
-/// Direct Form I (DF1) biquad topology.
+/// Type alias for the configuration of a biquad filter using the Direct Form 2 Transposed
+/// topology.
+///
+/// This alias simplifies the construction of biquad filter configurations. See
+/// [`DF1BiquadFilterConfig`] for an example of how these aliases may be used.
+pub type DF2BiquadFilterConfig<T> = BiquadFilterConfig<T, DirectForm2<T>>;
+
+/// Type alias for a biquad filter using the Direct Form 2 Transposed topology.
+///
+/// This alias simplifies the declaration of biquad filter types. See [`DF1BiquadFilter`] for an
+/// example of how these aliases may be used.
+pub type DF2BiquadFilter<T> = BiquadFilter<T, DirectForm2<T>>;
+
+/// Marker for the Direct Form I (DF1) biquad topology.
+///
+/// Users likely don't need to interact with this type directly; see the type aliases
+/// [`DF1BiquadFilterConfig`] and [`DF1BiquadFilter`] for convenient wrappers, or
+/// [`BiquadFilterConfigBuilder::direct_form_1`] to select this topology when building a config.
+///
+/// # Details
 ///
 /// Uses four delay elements — two past inputs (`x[n−1]`, `x[n−2]`) and two past
 /// outputs (`y[n−1]`, `y[n−2]`):
@@ -421,11 +492,11 @@ impl<T: Float> internal::BiquadTopology<T> for DirectForm2<T> {
 ///
 /// The cost over [`DirectForm2`] is two extra delay registers (four instead of two).
 ///
+/// # Applications
+///
 /// Betaflight's `biquadFilterApplyDF1` (`filter.c`) uses this topology for the
 /// RPM-tracking notch filter, which calls `biquadFilterUpdate` on every gyro loop
 /// iteration to track motor harmonics.
-///
-/// # When to use
 ///
 /// Prefer DF1 whenever the filter's cutoff frequency or Q must be updated at runtime.
 /// For filters whose coefficients are fixed at startup, [`DirectForm2`] is sufficient
@@ -446,12 +517,6 @@ impl<T: Float> Default for DirectForm1<T> {
             y1: t!(0),
             y2: t!(0),
         }
-    }
-}
-
-impl<T: Float> DirectForm1<T> {
-    pub fn new() -> Self {
-        Self::default()
     }
 }
 
@@ -498,9 +563,36 @@ impl<T: Float> internal::BiquadTopology<T> for DirectForm1<T> {
         self.y2 = state;
         Ok(())
     }
-
 }
 
+/// Type alias for the configuration of a biquad filter using the Direct Form 1 topology.
+///
+/// This alias simplifies the construction of biquad filter configurations, saving the user from
+/// having to repeat the float type for both filter and topology.
+///
+/// ```rust
+/// use air_filters::iir::biquad::{DF1BiquadFilter, DF1BiquadFilterConfig};
+///
+/// let config = DF1BiquadFilterConfig::<f32>::new();
+/// let filter = DF1BiquadFilter::new(config);
+/// ```
+pub type DF1BiquadFilterConfig<T> = BiquadFilterConfig<T, DirectForm1<T>>;
+
+/// Type alias for a biquad filter using the Direct Form I topology
+///
+/// This alias simplifies the declaration of biquad filter types, saving the user from having to
+/// repeat the float type for both filter and topology.
+///
+/// ```rust
+/// use air_filters::iir::biquad::DF1BiquadFilter;
+///
+/// struct Foo {
+///     pub filter: DF1BiquadFilter<f32>, // equivalent to BiquadFilter<f32, DirectForm2<f32>>
+/// }
+/// ```
+pub type DF1BiquadFilter<T> = BiquadFilter<T, DirectForm1<T>>;
+
+/// A biquad IIR filter with configurable type (LowPass, Notch, BandPass) and topology (DF1 or DF2T).
 #[derive(Debug, Clone)]
 pub struct BiquadFilter<T: Float, P: internal::BiquadTopology<T>> {
     coeffs: internal::BiquadFilterCoefficients<T>,

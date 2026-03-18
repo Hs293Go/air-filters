@@ -1,4 +1,3 @@
-// air-filters implements common digital filters inspired by implementations in betaflight
 // Copyright © 2026 H S Helson Go
 //
 // Permission is hereby granted, free of charge, to any person obtaining
@@ -19,7 +18,21 @@
 // TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
 // OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+//! air-filters implements common digital filters inspired by implementations in betaflight.
+//!
+//! It includes common filters like the [`Pt1Filter`](crate::iir::pt1::Pt1Filter) low-pass filter
+//! (equivalent to a single-pole RC filter/exponential moving average),
+//! [`Pt2Filter`](crate::iir::pt2::Pt2Filter) and [`Pt3Filter`](crate::iir::pt3::Pt3Filter) low-pass
+//! filters built from cascades of first order sections, and biquad filters for more complex
+//! filtering needs.
+//!
+//! The filters are designed to be correct by construction, with configurations managed by dedicated
+//! configuration structs such as [`CommonFilterConfig`] that enforce parameter validation. The
+//! filters implement a common trait [`Filter`] that allows for dynamic dispatch and composition,
+//! such as applying an array of filters to an array of inputs in a per-axis manner.
+
 #![no_std]
+#![warn(missing_docs)]
 
 #[cfg(feature = "alloc")]
 extern crate alloc;
@@ -36,50 +49,87 @@ use num_traits::Float;
 
 pub mod iir;
 
-/// Errors that can occur during filter configuration and operation. These errors cover invalid
-/// parameter values, such as non-positive or non-finite cutoff frequencies and sample frequencies,
-/// as well as violations of the Nyquist theorem and non-finite internal states. Each error variant
-/// is annotated with a descriptive message when the `std` feature is enabled, allowing for more
-/// informative error handling in environments that support the standard library.
+/// Errors that can occur during filter configuration and operation. Each error variant
+/// is annotated with a descriptive message via [`thiserror`] when the `std` feature is enabled.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "std", derive(thiserror::Error))]
 pub enum Error {
+    /// Signals when a cutoff frequency is set to a non-positive value (<= 0).
     #[cfg_attr(feature = "std", error("Cutoff frequency must be positive"))]
     NonPositiveCutoffFrequency,
+    /// Signals when a sample frequency is set to a non-positive value (<= 0).
     #[cfg_attr(feature = "std", error("Sample frequency must be positive"))]
     NonPositiveSampleFrequency,
+    /// Signals when a quality factor is set to a non-positive value (<= 0).
     #[cfg_attr(feature = "std", error("Quality factor must be positive"))]
     NonPositiveQualityFactor,
+    /// Signals when a cutoff frequency is set to a non-finite value (NaN or infinity).
     #[cfg_attr(feature = "std", error("Cutoff frequency must be finite"))]
     NonFiniteCutoffFrequency,
+    /// Signals when a sample frequency is set to a non-finite value (NaN or infinity).
     #[cfg_attr(feature = "std", error("Sample frequency must be finite"))]
     NonFiniteSampleFrequency,
+    /// Signals when a quality factor is set to a non-finite value (NaN or infinity).
     #[cfg_attr(feature = "std", error("Quality factor must be finite"))]
     NonFiniteQualityFactor,
+
+    /// Signals when the cutoff frequency is greater than or equal to half the sample frequency,
+    /// which violates the Nyquist theorem. This situation is mathematically fatal for
+    /// [`BiquadFilter`](crate::iir::biquad), but not for [`Pt1Filter`](crate::iir::pt1::Pt1Filter),
+    /// etc. cascaded filters.
+    #[cfg(any(feature = "libm", feature = "std"))]
     #[cfg_attr(feature = "std", error("Nyquist theorem violation: cutoff frequency must be less than half the sample frequency"))]
     NyquistTheoremViolation,
+
+    /// Signals when a filter's internal state is set to a non-finite value (NaN or infinity) during reset.
     #[cfg_attr(feature = "std", error("Filter internal state must remain finite"))]
     NonFiniteState,
 }
 
 /// Trait representing a generic filter that can be applied to input samples and stores internal state.
+///
+/// The trait minimally requires the filters to implement `apply` and `reset` methods. A trait
+/// object of `Filter<T>` allows easy dynamic dispatch of different filter implementations to the
+/// effect of betaflight's selection of different filters for IMU filtering.
+///
+/// # Example
+///
+/// ```rust
+/// const ORDER: usize = 1;
+/// let cfg = air_filters::CommonFilterConfig::new();
+/// let mut filter: Box<dyn air_filters::Filter<f64>> = match ORDER {
+///     1 => Box::new(air_filters::iir::pt1::Pt1Filter::new(cfg))
+///         as Box<dyn air_filters::Filter<f64>>,
+///     #[cfg(any(feature = "libm", feature = "std"))]
+///     2 => Box::new(air_filters::iir::pt2::Pt2Filter::new(cfg)),
+///     #[cfg(any(feature = "libm", feature = "std"))]
+///     3 => Box::new(air_filters::iir::pt3::Pt3Filter::new(cfg)),
+///     _ => panic!("Unsupported filter order"),
+/// };
+/// ```
 pub trait Filter<T> {
     /// Applies the filter to the input sample and updates the internal state. The output is the new state.
     fn apply(&mut self, input: T) -> T;
 
     /// Resets the filter state to the specified value. Returns an error if the state is not finite.
+    ///
+    /// Implementers should ensure that if resetting fails, the filter's state is not modified.
     fn reset(&mut self, state: T) -> Result<(), Error>;
 }
 
-impl<F, T, const N: usize> Filter<[T; N]> for [F; N]
-where
-    F: Filter<T>,
-    T: Float,
-{
+impl<F: Filter<T>, T: Float, const N: usize> Filter<[T; N]> for [F; N] {
+    /// Applies each filter in the array to the corresponding element of the input array, returning
+    /// an array of outputs. The state of each filter is updated independently based on its own
+    /// input.
     fn apply(&mut self, input: [T; N]) -> [T; N] {
         core::array::from_fn(|i| self[i].apply(input[i]))
     }
 
+    /// Resets each filter in the array to the corresponding state in the input array. If any reset
+    /// fails, an error is returned and subsequent filters are not reset.
+    ///
+    /// If `Filter::reset` of an individual filter may mutate its state before returning an error,
+    /// this method may leave the array of filters in a partially reset state.
     fn reset(&mut self, state: [T; N]) -> Result<(), Error> {
         for (f, s) in self.iter_mut().zip(state) {
             f.reset(s)?;
@@ -131,11 +181,13 @@ mod internal {
     }
 }
 
+/// Trait for filters that have common configurable parameters (cutoff frequency and sample frequency).
 pub trait CommonConfigurableFilter<T: Float>: Filter<T> + internal::ConfigurableFilter<T> {
+    /// Returns a reference to the internal configuration object
     fn config(&self) -> &CommonFilterConfig<T>;
 
     /// Sets the cutoff frequency, in Hz, of the filter by deferring to
-    /// [`CommonFilterConfig::cutoff_frequency_hz`] of the internal configuration object, then
+    /// [`CommonFilterConfig::set_cutoff_frequency_hz`] of the internal configuration object, then
     /// updates the filter configuration if successful.
     fn set_cutoff_frequency_hz(&mut self, cutoff_frequency_hz: T) -> Result<(), Error> {
         self.config_mut()
@@ -144,7 +196,7 @@ pub trait CommonConfigurableFilter<T: Float>: Filter<T> + internal::Configurable
     }
 
     /// Sets the sample frequency, in Hz, of the filter by deferring to
-    /// [`CommonFilterConfig::sample_frequency_hz`] of the internal configuration object, then
+    /// [`CommonFilterConfig::set_sample_frequency_hz`] of the internal configuration object, then
     /// updates the filter configuration if successful
     fn set_sample_frequency_hz(&mut self, sample_frequency_hz: T) -> Result<(), Error> {
         self.config_mut()
@@ -190,6 +242,11 @@ impl<T: Float> Default for CommonFilterConfig<T> {
 }
 
 impl<T: Float> CommonFilterConfig<T> {
+    /// Creates a new `CommonFilterConfig` with default values for cutoff frequency (10.0 Hz) and sample frequency (100.0 Hz).
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     /// Sets the cutoff frequency in Hz in the configuration. Must be positive and finite.
     pub fn set_cutoff_frequency_hz(&mut self, cutoff_frequency_hz: T) -> Result<(), Error> {
         if !cutoff_frequency_hz.is_finite() {
@@ -254,6 +311,8 @@ impl<T: Float> Default for CommonFilterConfigBuilder<T> {
 }
 
 impl<T: Float> CommonFilterConfigBuilder<T> {
+    /// Creates a new `CommonFilterConfigBuilder` with no parameters configured. If parameters are
+    /// left unconfigured, they will follow defaults in [`CommonFilterConfig::default()`].
     pub fn new() -> Self {
         Self::default()
     }

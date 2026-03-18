@@ -1,3 +1,4 @@
+//! A second-order low-pass filter implemented as a cascade of two first-order filters.
 use num_traits::{Float, FloatConst, Pow};
 
 use crate::{

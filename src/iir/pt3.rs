@@ -1,3 +1,4 @@
+//! A third-order low-pass filter implemented as a cascade of three first-order filters.
 use num_traits::{Float, FloatConst, Pow};
 
 use crate::{

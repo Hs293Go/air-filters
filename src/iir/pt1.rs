@@ -1,3 +1,14 @@
+// SPDX-License-Identifier: MIT
+
+//! A 1st-order low-pass filter (PT1/Proportional Time-Lag) implemented using the forward Euler
+//! method for discretization.
+//!
+//! This filter is usable in highly constrained environments where not even libm is available, and
+//! is the only filter available if this crate is built with `--no-default-features`, but not
+//! `--features libm`.`
+//!
+//! This filter is mathematically equivalent to an exponential moving average (EMA) filter.
+
 use num_traits::{Float, FloatConst};
 
 use crate::{
@@ -49,7 +60,10 @@ impl<T: Float + FloatConst> Pt1Filter<T> {
         self.state
     }
 
-    /// Returns the smoothing constant `k`.
+    /// Returns the smoothing constant `k` in the formula `s_next = s + k * (input - s)`.
+    ///
+    /// If the PT1 filter is viewed as an exponential moving average, then `k = 1 - alpha` where
+    /// `alpha` is the smoothing factor in the EMA formula: `s_next = alpha * input + (1 - alpha) * s`.
     pub fn smoothing_constant(&self) -> T {
         self.k
     }
