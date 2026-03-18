@@ -12,18 +12,23 @@
 //!   --save-path <str>     Path to save the output plot image (default: ulog_accel_filtered.png)
 mod ulog;
 
+use air_filters::CommonFilterConfig;
 use clap::{Parser, ValueEnum};
 use plotters::prelude::*;
 
-use air_filters::{
-    iir::{
-        biquad::{BiquadFilter, BiquadFilterConfigBuilder, BiquadFilterType, DirectForm2},
-        pt1::Pt1Filter,
-        pt2::Pt2Filter,
-        pt3::Pt3Filter,
-    },
-    CommonFilterConfigBuilder, Filter,
+// PT1 filter is available in bare minimal no_std and libm-free environments
+use air_filters::{iir::pt1::Pt1Filter, CommonFilterConfigBuilder, Filter};
+
+// PT2, PT3, and biquad filters require libm for the more complex math functions. In this example,
+// we toggle them on in trait objects with dynamic dispatch, which requires alloc for the heap allocation of the trait
+#[cfg(any(feature = "std", all(feature = "libm", feature = "alloc")))]
+use air_filters::iir::biquad::{
+    BiquadFilter, BiquadFilterConfigBuilder, BiquadFilterType, DirectForm2,
 };
+#[cfg(any(feature = "std", all(feature = "libm", feature = "alloc")))]
+use air_filters::iir::pt2::Pt2Filter;
+#[cfg(any(feature = "std", all(feature = "libm", feature = "alloc")))]
+use air_filters::iir::pt3::Pt3Filter;
 
 // ── Main ─────────────────────────────────────────────────────────────────────
 
@@ -33,7 +38,7 @@ fn stddev(v: &[f64]) -> f64 {
     (v.iter().map(|x| (x - mean).powi(2)).sum::<f64>() / n).sqrt()
 }
 
-#[derive(ValueEnum, Clone, Debug)]
+#[derive(ValueEnum, Clone, Debug, PartialEq, Eq)]
 enum FilterOptions {
     Pt1,
     Pt2,
@@ -41,7 +46,7 @@ enum FilterOptions {
     Biquad,
 }
 
-#[derive(ValueEnum, Clone, Debug)]
+#[derive(ValueEnum, Clone, Debug, PartialEq, Eq)]
 enum DataType {
     Accel,
     Gyro,
@@ -58,7 +63,7 @@ struct Args {
     cutoff_hz: f64,
 
     /// Filter type
-    #[arg(short, long, value_enum, default_value_t = FilterOptions::Biquad)]
+    #[arg(short, long, value_enum, default_value_t = FilterOptions::Pt1)]
     filter_type: FilterOptions,
 
     /// Data type to plot (accel or gyro)
@@ -72,6 +77,48 @@ struct Args {
     /// Path to save the output plot image.
     #[arg(short, long, default_value_t = String::from("imu_filtered.svg"))]
     save_path: String,
+}
+
+// With alloc, we can choose filter types at runtime by using Filter trait object.
+#[cfg(any(feature = "alloc", feature = "std"))]
+fn create_filter(
+    filter_type: &FilterOptions,
+    common_cfg: CommonFilterConfig<f64>,
+    cutoff_hz: f64,
+    sample_hz: f64,
+) -> [Box<dyn Filter<f64>>; 3] {
+    eprintln!("Using filter type: {filter_type:?}");
+    std::array::from_fn(|_| match filter_type {
+        FilterOptions::Pt1 => Box::new(Pt1Filter::new(common_cfg)) as Box<dyn Filter<f64>>,
+
+        #[cfg(any(feature = "libm", feature = "std"))]
+        FilterOptions::Biquad => Box::new(BiquadFilter::new(
+            BiquadFilterConfigBuilder::<f64, DirectForm2<f64>>::direct_form_2()
+                .cutoff_frequency_hz(cutoff_hz)
+                .sample_frequency_hz(sample_hz)
+                .filter_type(BiquadFilterType::LowPass)
+                .build()
+                .expect("filter config"),
+        )),
+
+        #[cfg(any(feature = "libm", feature = "std"))]
+        FilterOptions::Pt2 => Box::new(Pt2Filter::new(common_cfg)),
+        #[cfg(any(feature = "libm", feature = "std"))]
+        FilterOptions::Pt3 => Box::new(Pt3Filter::new(common_cfg)),
+    })
+}
+
+// Without alloc, we cannot toggle filter types at runtime, so we demonstrate the allocation
+// AND libm free PT1 filter instead
+#[cfg(not(feature = "alloc"))]
+fn create_filter(
+    filter_type: &FilterOptions,
+    common_cfg: CommonFilterConfig<f64>,
+    _cutoff_hz: f64,
+    _sample_hz: f64,
+) -> [Pt1Filter<f64>; 3] {
+    eprintln!("Overriding selected filter: {filter_type:?} wth PT1 filter (other types require libm and alloc features)");
+    std::array::from_fn(|_| Pt1Filter::new(common_cfg))
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -127,23 +174,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()
         .expect("filter config");
 
-    let mut bq: [Box<dyn Filter<f64>>; 3] = std::array::from_fn(|_| match filter_type {
-        FilterOptions::Biquad => Box::new(BiquadFilter::new(
-            BiquadFilterConfigBuilder::<f64, DirectForm2<f64>>::direct_form_2()
-                .cutoff_frequency_hz(cutoff_hz)
-                .sample_frequency_hz(sample_hz)
-                .filter_type(BiquadFilterType::LowPass)
-                .build()
-                .expect("filter config"),
-        )) as Box<dyn Filter<f64>>,
-        FilterOptions::Pt1 => Box::new(Pt1Filter::new(common_cfg)),
-        FilterOptions::Pt2 => Box::new(Pt2Filter::new(common_cfg)),
-        FilterOptions::Pt3 => Box::new(Pt3Filter::new(common_cfg)),
-    });
-    eprintln!("Using filter type: {filter_type:?}");
+    let mut bq = create_filter(&filter_type, common_cfg, cutoff_hz, sample_hz);
 
     // ── Filter sample-by-sample ───────────────────────────────────────────────
-
     let raw = [ax.as_slice(), ay.as_slice(), az.as_slice()];
     let mut bq_out: [Vec<f64>; 3] = [
         Vec::with_capacity(n),

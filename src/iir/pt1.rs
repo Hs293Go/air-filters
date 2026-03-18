@@ -9,20 +9,20 @@
 //!
 //! This filter is mathematically equivalent to an exponential moving average (EMA) filter.
 
-use num_traits::{Float, FloatConst};
+use num_traits::{float::FloatCore, FloatConst};
 
 use crate::{
     internal::ConfigurableFilter, CommonConfigurableFilter, CommonFilterConfig, Error, Filter,
 };
 
 /// A 1st-order low-pass filter implemented using the forward Euler method for discretization.
-pub struct Pt1Filter<T: Float> {
+pub struct Pt1Filter<T: FloatCore> {
     k: T,
     state: T,
     config: CommonFilterConfig<T>,
 }
 
-impl<T: Float + FloatConst> ConfigurableFilter<T> for Pt1Filter<T> {
+impl<T: FloatCore + FloatConst> ConfigurableFilter<T> for Pt1Filter<T> {
     fn update_configuration(&mut self) -> Result<(), Error> {
         self.k = Self::compute_gain(&self.config);
         Ok(())
@@ -33,13 +33,13 @@ impl<T: Float + FloatConst> ConfigurableFilter<T> for Pt1Filter<T> {
     }
 }
 
-impl<T: Float + FloatConst> CommonConfigurableFilter<T> for Pt1Filter<T> {
+impl<T: FloatCore + FloatConst> CommonConfigurableFilter<T> for Pt1Filter<T> {
     fn config(&self) -> &CommonFilterConfig<T> {
         &self.config
     }
 }
 
-impl<T: Float + FloatConst> Pt1Filter<T> {
+impl<T: FloatCore + FloatConst> Pt1Filter<T> {
     fn compute_gain(config: &CommonFilterConfig<T>) -> T {
         let rc = t!(1) / (T::TAU() * config.cutoff_frequency_hz);
         let sample_time = t!(1) / config.sample_frequency_hz;
@@ -69,7 +69,7 @@ impl<T: Float + FloatConst> Pt1Filter<T> {
     }
 }
 
-impl<T: Float> Filter<T> for Pt1Filter<T> {
+impl<T: FloatCore> Filter<T> for Pt1Filter<T> {
     /// Applies the filter to the input sample and updates the internal state. The output is the new state.
     fn apply(&mut self, input: T) -> T {
         self.state = self.state + self.k * (input - self.state);

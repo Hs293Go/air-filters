@@ -1,25 +1,22 @@
 //! A second-order low-pass filter implemented as a cascade of two first-order filters.
-use num_traits::{Float, FloatConst, Pow};
+use num_traits::{float::FloatCore, real::Real, FloatConst};
 
 use crate::{
     internal::ConfigurableFilter, CommonConfigurableFilter, CommonFilterConfig, Error, Filter,
 };
 
 /// A second-order low-pass filter implemented as a cascade of two first-order filters.
-pub struct Pt2Filter<T: Float> {
+pub struct Pt2Filter<T: FloatCore + Real> {
     k: T,
     state: T,
     state1: T,
     config: CommonFilterConfig<T>,
 }
 
-impl<T: Float + FloatConst> Pt2Filter<T>
-where
-    T: Pow<T, Output = T>,
-{
+impl<T: FloatCore + Real + FloatConst> Pt2Filter<T> {
     fn compute_gain(config: &CommonFilterConfig<T>) -> T {
         const ORDER: i32 = 2;
-        let order_cutoff_correction = t!(1) / (t!(2).pow(t!(1) / t!(ORDER)) - t!(1)).sqrt();
+        let order_cutoff_correction = t!(1) / (t!(2).powf(t!(1) / t!(ORDER)) - t!(1)).sqrt();
         let rc = t!(1) / (order_cutoff_correction * T::TAU() * config.cutoff_frequency_hz);
         let sample_time = t!(1) / config.sample_frequency_hz;
         sample_time / (rc + sample_time)
@@ -46,10 +43,7 @@ where
     }
 }
 
-impl<T: Float + FloatConst> ConfigurableFilter<T> for Pt2Filter<T>
-where
-    T: Pow<T, Output = T>,
-{
+impl<T: FloatCore + Real + FloatConst> ConfigurableFilter<T> for Pt2Filter<T> {
     fn update_configuration(&mut self) -> Result<(), Error> {
         self.k = Self::compute_gain(&self.config);
         Ok(())
@@ -60,16 +54,13 @@ where
     }
 }
 
-impl<T: Float + FloatConst> CommonConfigurableFilter<T> for Pt2Filter<T>
-where
-    T: Pow<T, Output = T>,
-{
+impl<T: FloatCore + Real + FloatConst> CommonConfigurableFilter<T> for Pt2Filter<T> {
     fn config(&self) -> &CommonFilterConfig<T> {
         &self.config
     }
 }
 
-impl<T: Float> Filter<T> for Pt2Filter<T> {
+impl<T: FloatCore + Real> Filter<T> for Pt2Filter<T> {
     /// Applies the filter to the input sample and updates the internal states. The output is the new state.
     fn apply(&mut self, input: T) -> T {
         self.state1 = self.state1 + self.k * (input - self.state1);

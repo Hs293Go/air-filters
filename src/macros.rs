@@ -16,6 +16,7 @@ macro_rules! t {
     // expressed with the arms above.  T::from() on any numeric constant returns
     // Some(_) for every T: Float; the unwrap path is therefore unreachable.
     ($val:expr) => {
-        T::from($val).unwrap_or_else(|| unreachable!("numeric constant is not representable in T: Float"))
+        T::from($val)
+            .unwrap_or_else(|| unreachable!("numeric constant is not representable in T: Float"))
     };
 }

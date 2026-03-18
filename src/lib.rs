@@ -45,7 +45,7 @@ mod macros;
 
 use core::time::Duration;
 
-use num_traits::Float;
+use num_traits::float::FloatCore;
 
 pub mod iir;
 
@@ -117,7 +117,7 @@ pub trait Filter<T> {
     fn reset(&mut self, state: T) -> Result<(), Error>;
 }
 
-impl<F: Filter<T>, T: Float, const N: usize> Filter<[T; N]> for [F; N] {
+impl<F: Filter<T>, T: FloatCore, const N: usize> Filter<[T; N]> for [F; N] {
     /// Applies each filter in the array to the corresponding element of the input array, returning
     /// an array of outputs. The state of each filter is updated independently based on its own
     /// input.
@@ -139,7 +139,7 @@ impl<F: Filter<T>, T: Float, const N: usize> Filter<[T; N]> for [F; N] {
 }
 
 #[cfg(feature = "alloc")]
-impl<T: Float> Filter<T> for Box<dyn Filter<T>> {
+impl<T: FloatCore> Filter<T> for Box<dyn Filter<T>> {
     fn apply(&mut self, input: T) -> T {
         (**self).apply(input)
     }
@@ -150,7 +150,7 @@ impl<T: Float> Filter<T> for Box<dyn Filter<T>> {
 }
 
 #[cfg(feature = "alloc")]
-impl<T: Float> Filter<T> for Box<dyn Filter<T> + Send> {
+impl<T: FloatCore> Filter<T> for Box<dyn Filter<T> + Send> {
     fn apply(&mut self, input: T) -> T {
         (**self).apply(input)
     }
@@ -161,7 +161,7 @@ impl<T: Float> Filter<T> for Box<dyn Filter<T> + Send> {
 }
 
 #[cfg(feature = "alloc")]
-impl<T: Float> Filter<T> for Box<dyn Filter<T> + Send + Sync> {
+impl<T: FloatCore> Filter<T> for Box<dyn Filter<T> + Send + Sync> {
     fn apply(&mut self, input: T) -> T {
         (**self).apply(input)
     }
@@ -174,7 +174,7 @@ impl<T: Float> Filter<T> for Box<dyn Filter<T> + Send + Sync> {
 mod internal {
     use super::*;
 
-    pub trait ConfigurableFilter<T: Float> {
+    pub trait ConfigurableFilter<T: FloatCore> {
         fn config_mut(&mut self) -> &mut CommonFilterConfig<T>;
 
         fn update_configuration(&mut self) -> Result<(), super::Error>;
@@ -182,7 +182,9 @@ mod internal {
 }
 
 /// Trait for filters that have common configurable parameters (cutoff frequency and sample frequency).
-pub trait CommonConfigurableFilter<T: Float>: Filter<T> + internal::ConfigurableFilter<T> {
+pub trait CommonConfigurableFilter<T: FloatCore>:
+    Filter<T> + internal::ConfigurableFilter<T>
+{
     /// Returns a reference to the internal configuration object
     fn config(&self) -> &CommonFilterConfig<T>;
 
@@ -227,12 +229,12 @@ pub trait CommonConfigurableFilter<T: Float>: Filter<T> + internal::Configurable
 /// Common configuration parameters for all filters, consisting of cutoff frequency_hz and sample
 /// frequency_hz. This struct is used as a base for more specific filter configurations.
 #[derive(Debug, Copy, Clone)]
-pub struct CommonFilterConfig<T: Float> {
+pub struct CommonFilterConfig<T: FloatCore> {
     cutoff_frequency_hz: T,
     sample_frequency_hz: T,
 }
 
-impl<T: Float> Default for CommonFilterConfig<T> {
+impl<T: FloatCore> Default for CommonFilterConfig<T> {
     fn default() -> Self {
         Self {
             cutoff_frequency_hz: T::from(10.0).unwrap(),
@@ -241,7 +243,7 @@ impl<T: Float> Default for CommonFilterConfig<T> {
     }
 }
 
-impl<T: Float> CommonFilterConfig<T> {
+impl<T: FloatCore> CommonFilterConfig<T> {
     /// Creates a new `CommonFilterConfig` with default values for cutoff frequency (10.0 Hz) and sample frequency (100.0 Hz).
     pub fn new() -> Self {
         Self::default()
@@ -279,7 +281,7 @@ impl<T: Float> CommonFilterConfig<T> {
     /// reciprocal of the loop time. The loop time must be positive and finite.
     pub fn set_sample_loop_time(&mut self, sample_loop_time: Duration) -> Result<(), Error> {
         let sample_frequency_hz = T::from(sample_loop_time.as_secs_f64().recip())
-            .unwrap_or_else(|| unreachable!("f64 is always representable in T: Float"));
+            .unwrap_or_else(|| unreachable!("f64 is always representable in T: FloatCore"));
         self.set_sample_frequency_hz(sample_frequency_hz)
     }
 
@@ -296,12 +298,12 @@ impl<T: Float> CommonFilterConfig<T> {
 
 /// Builder for [`CommonFilterConfig`] that allows for flexible construction with validation.
 #[derive(Debug, Clone)]
-pub struct CommonFilterConfigBuilder<T: Float> {
+pub struct CommonFilterConfigBuilder<T: FloatCore> {
     cutoff_frequency_hz: Option<T>,
     sample_frequency_hz: Option<T>,
 }
 
-impl<T: Float> Default for CommonFilterConfigBuilder<T> {
+impl<T: FloatCore> Default for CommonFilterConfigBuilder<T> {
     fn default() -> Self {
         Self {
             cutoff_frequency_hz: None,
@@ -310,7 +312,7 @@ impl<T: Float> Default for CommonFilterConfigBuilder<T> {
     }
 }
 
-impl<T: Float> CommonFilterConfigBuilder<T> {
+impl<T: FloatCore> CommonFilterConfigBuilder<T> {
     /// Creates a new `CommonFilterConfigBuilder` with no parameters configured. If parameters are
     /// left unconfigured, they will follow defaults in [`CommonFilterConfig::default()`].
     pub fn new() -> Self {
@@ -333,7 +335,7 @@ impl<T: Float> CommonFilterConfigBuilder<T> {
     /// reciprocal of the loop time.
     pub fn sample_loop_time(self, sample_loop_time: Duration) -> Self {
         let sample_frequency_hz = T::from(sample_loop_time.as_secs_f64().recip())
-            .unwrap_or_else(|| unreachable!("f64 is always representable in T: Float"));
+            .unwrap_or_else(|| unreachable!("f64 is always representable in T: FloatCore"));
         self.sample_frequency_hz(sample_frequency_hz)
     }
 
@@ -368,7 +370,7 @@ impl<T: Float> CommonFilterConfigBuilder<T> {
     }
 }
 
-impl<T: Float> TryFrom<CommonFilterConfigBuilder<T>> for CommonFilterConfig<T> {
+impl<T: FloatCore> TryFrom<CommonFilterConfigBuilder<T>> for CommonFilterConfig<T> {
     type Error = Error;
 
     fn try_from(builder: CommonFilterConfigBuilder<T>) -> Result<Self, Self::Error> {
@@ -387,13 +389,13 @@ mod tests {
         state: T,
     }
 
-    impl<T: Float> Mock<T> {
+    impl<T: FloatCore> Mock<T> {
         fn new() -> Self {
             Self { state: T::zero() }
         }
     }
 
-    impl<T: Float> Filter<T> for Mock<T> {
+    impl<T: FloatCore> Filter<T> for Mock<T> {
         fn apply(&mut self, input: T) -> T {
             self.state = input;
             self.state

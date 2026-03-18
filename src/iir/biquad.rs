@@ -50,7 +50,7 @@ use crate::{
     internal::ConfigurableFilter, CommonConfigurableFilter, CommonFilterConfig,
     CommonFilterConfigBuilder, Error, Filter,
 };
-use num_traits::{Float, FloatConst};
+use num_traits::{float::FloatCore, real::Real, FloatConst};
 
 /// Supported biquad filter types. Each type corresponds to a specific transfer function and frequency response:
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -71,7 +71,7 @@ pub enum BiquadFilterType {
 mod internal {
     use super::*;
     #[derive(Debug, Clone)]
-    pub struct BiquadFilterCoefficients<T: Float> {
+    pub struct BiquadFilterCoefficients<T: FloatCore + Real> {
         pub a1: T,
         pub a2: T,
         pub b0: T,
@@ -80,7 +80,7 @@ mod internal {
     }
 
     /// Defines the topology of the biquad filter and manages the internal states.
-    pub trait BiquadTopology<T: Float>: Default {
+    pub trait BiquadTopology<T: FloatCore + Real>: Default {
         /// Compute the output of the filter for the given input and coefficients, while updating the internal state.
         fn compute(&mut self, input: T, coeffs: &BiquadFilterCoefficients<T>) -> T;
 
@@ -97,14 +97,14 @@ mod internal {
 /// frequency) and biquad-specific parameters (filter type, Q). The filter topology is encoded
 /// in the type parameter `P`.
 #[derive(Debug, Copy, Clone)]
-pub struct BiquadFilterConfig<T: Float, P: internal::BiquadTopology<T>> {
+pub struct BiquadFilterConfig<T: FloatCore + Real, P: internal::BiquadTopology<T>> {
     base_config: CommonFilterConfig<T>,
     filter_type: BiquadFilterType,
     q: T,
     _topology: PhantomData<P>,
 }
 
-impl<T: Float + FloatConst> Default for BiquadFilterConfig<T, DirectForm1<T>> {
+impl<T: FloatCore + Real + FloatConst> Default for BiquadFilterConfig<T, DirectForm1<T>> {
     /// Returns a default configuration for a biquad filter with [`DirectForm1`] topology, with
     /// cutoff frequency and sample frequency following [`CommonFilterConfig::default`] and filter
     /// type set to LowPass with Q fixed to 1/sqrt(2) for a Butterworth response.
@@ -118,7 +118,7 @@ impl<T: Float + FloatConst> Default for BiquadFilterConfig<T, DirectForm1<T>> {
     }
 }
 
-impl<T: Float + FloatConst> Default for BiquadFilterConfig<T, DirectForm2<T>> {
+impl<T: FloatCore + Real + FloatConst> Default for BiquadFilterConfig<T, DirectForm2<T>> {
     /// Returns a default configuration for a biquad filter with [`DirectForm2`] topology, with
     /// cutoff frequency and sample frequency following [`CommonFilterConfig::default`] and filter
     /// type set to LowPass with Q fixed to 1/sqrt(2) for a Butterworth response.
@@ -132,7 +132,7 @@ impl<T: Float + FloatConst> Default for BiquadFilterConfig<T, DirectForm2<T>> {
     }
 }
 
-impl<T: Float + FloatConst> BiquadFilterConfig<T, DirectForm1<T>> {
+impl<T: FloatCore + Real + FloatConst> BiquadFilterConfig<T, DirectForm1<T>> {
     /// Creates a new `BiquadFilterConfig` with [`DirectForm1`] topology with default parameters
     /// following [`BiquadFilterConfig::default`].
     pub fn new() -> Self {
@@ -140,7 +140,7 @@ impl<T: Float + FloatConst> BiquadFilterConfig<T, DirectForm1<T>> {
     }
 }
 
-impl<T: Float + FloatConst> BiquadFilterConfig<T, DirectForm2<T>> {
+impl<T: FloatCore + Real + FloatConst> BiquadFilterConfig<T, DirectForm2<T>> {
     /// Creates a new `BiquadFilterConfig` with [`DirectForm2`] topology with default parameters
     /// following [`BiquadFilterConfig::default`].
     pub fn new() -> Self {
@@ -148,7 +148,7 @@ impl<T: Float + FloatConst> BiquadFilterConfig<T, DirectForm2<T>> {
     }
 }
 
-impl<T: Float + FloatConst, P: internal::BiquadTopology<T>> BiquadFilterConfig<T, P> {
+impl<T: FloatCore + Real + FloatConst, P: internal::BiquadTopology<T>> BiquadFilterConfig<T, P> {
     /// Returns the cutoff frequency in Hz.
     pub fn cutoff_frequency_hz(&self) -> T {
         self.base_config.cutoff_frequency_hz
@@ -195,7 +195,7 @@ impl<T: Float + FloatConst, P: internal::BiquadTopology<T>> BiquadFilterConfig<T
         sample_loop_time: core::time::Duration,
     ) -> Result<(), Error> {
         let sample_frequency_hz = T::from(sample_loop_time.as_secs_f64().recip())
-            .unwrap_or_else(|| unreachable!("f64 is always representable in T: Float"));
+            .unwrap_or_else(|| unreachable!("f64 is always representable in T: FloatCore+Real"));
         self.set_sample_frequency_hz(sample_frequency_hz)
     }
 
@@ -231,14 +231,14 @@ impl<T: Float + FloatConst, P: internal::BiquadTopology<T>> BiquadFilterConfig<T
 
 /// Builder for constructing a [`BiquadFilterConfig`] with either [`DirectForm1`] or [`DirectForm2`] topology.
 #[derive(Debug, Clone)]
-pub struct BiquadFilterConfigBuilder<T: Float, P: internal::BiquadTopology<T>> {
+pub struct BiquadFilterConfigBuilder<T: FloatCore + Real, P: internal::BiquadTopology<T>> {
     base_config_builder: CommonFilterConfigBuilder<T>,
     filter_type: Option<BiquadFilterType>,
     q: Option<T>,
     _topology: PhantomData<P>,
 }
 
-impl<T: Float> BiquadFilterConfigBuilder<T, DirectForm1<T>> {
+impl<T: FloatCore + Real> BiquadFilterConfigBuilder<T, DirectForm1<T>> {
     /// Creates a new builder for a [`DirectForm1`] biquad filter.
     ///
     /// Choose DF1 when the filter's cutoff frequency or Q will be updated at runtime via
@@ -255,7 +255,7 @@ impl<T: Float> BiquadFilterConfigBuilder<T, DirectForm1<T>> {
     }
 }
 
-impl<T: Float> BiquadFilterConfigBuilder<T, DirectForm2<T>> {
+impl<T: FloatCore + Real> BiquadFilterConfigBuilder<T, DirectForm2<T>> {
     /// Creates a new builder for a [`DirectForm2`] (DF2T) biquad filter.
     ///
     /// Choose DF2T when the filter's coefficients are not likely to change during active
@@ -272,7 +272,9 @@ impl<T: Float> BiquadFilterConfigBuilder<T, DirectForm2<T>> {
     }
 }
 
-impl<T: Float + FloatConst, P: internal::BiquadTopology<T>> BiquadFilterConfigBuilder<T, P> {
+impl<T: FloatCore + Real + FloatConst, P: internal::BiquadTopology<T>>
+    BiquadFilterConfigBuilder<T, P>
+{
     /// Configures the cutoff frequency in Hz.
     pub fn cutoff_frequency_hz(mut self, cutoff_frequency_hz: T) -> Self {
         self.base_config_builder = self
@@ -373,12 +375,12 @@ impl<T: Float + FloatConst, P: internal::BiquadTopology<T>> BiquadFilterConfigBu
 /// during operation — a fixed gyroscope low-pass filter being the canonical example.
 /// For filters that must update their cutoff or Q at runtime, use [`DirectForm1`].
 #[derive(Debug, Clone)]
-pub struct DirectForm2<T: Float> {
+pub struct DirectForm2<T: FloatCore + Real> {
     x1: T,
     x2: T,
 }
 
-impl<T: Float> Default for DirectForm2<T> {
+impl<T: FloatCore + Real> Default for DirectForm2<T> {
     fn default() -> Self {
         Self {
             x1: t!(0),
@@ -387,7 +389,7 @@ impl<T: Float> Default for DirectForm2<T> {
     }
 }
 
-impl<T: Float> internal::BiquadTopology<T> for DirectForm2<T> {
+impl<T: FloatCore + Real> internal::BiquadTopology<T> for DirectForm2<T> {
     /// Evaluate one DF2T sample.
     ///
     /// `x1` and `x2` hold `w[n−1]` and `w[n−2]` — values of the intermediate variable
@@ -502,14 +504,14 @@ pub type DF2BiquadFilter<T> = BiquadFilter<T, DirectForm2<T>>;
 /// For filters whose coefficients are fixed at startup, [`DirectForm2`] is sufficient
 /// and uses half the delay-line registers.
 #[derive(Debug, Clone)]
-pub struct DirectForm1<T: Float> {
+pub struct DirectForm1<T: FloatCore + Real> {
     x1: T,
     x2: T,
     y1: T,
     y2: T,
 }
 
-impl<T: Float> Default for DirectForm1<T> {
+impl<T: FloatCore + Real> Default for DirectForm1<T> {
     fn default() -> Self {
         Self {
             x1: t!(0),
@@ -520,7 +522,7 @@ impl<T: Float> Default for DirectForm1<T> {
     }
 }
 
-impl<T: Float> internal::BiquadTopology<T> for DirectForm1<T> {
+impl<T: FloatCore + Real> internal::BiquadTopology<T> for DirectForm1<T> {
     /// Evaluate one DF1 sample.
     ///
     /// `x1`, `x2` hold past input samples; `y1`, `y2` hold past output samples. All
@@ -594,13 +596,13 @@ pub type DF1BiquadFilter<T> = BiquadFilter<T, DirectForm1<T>>;
 
 /// A biquad IIR filter with configurable type (LowPass, Notch, BandPass) and topology (DF1 or DF2T).
 #[derive(Debug, Clone)]
-pub struct BiquadFilter<T: Float, P: internal::BiquadTopology<T>> {
+pub struct BiquadFilter<T: FloatCore + Real, P: internal::BiquadTopology<T>> {
     coeffs: internal::BiquadFilterCoefficients<T>,
     topology: P,
     config: BiquadFilterConfig<T, P>,
 }
 
-impl<T: Float + FloatConst, P: internal::BiquadTopology<T>> BiquadFilter<T, P> {
+impl<T: FloatCore + Real + FloatConst, P: internal::BiquadTopology<T>> BiquadFilter<T, P> {
     fn compute_coeffs(config: &BiquadFilterConfig<T, P>) -> internal::BiquadFilterCoefficients<T> {
         let CommonFilterConfig {
             cutoff_frequency_hz,
@@ -668,7 +670,7 @@ impl<T: Float + FloatConst, P: internal::BiquadTopology<T>> BiquadFilter<T, P> {
     }
 }
 
-impl<T: Float + FloatConst, P: internal::BiquadTopology<T>> ConfigurableFilter<T>
+impl<T: FloatCore + Real + FloatConst, P: internal::BiquadTopology<T>> ConfigurableFilter<T>
     for BiquadFilter<T, P>
 {
     fn update_configuration(&mut self) -> Result<(), Error> {
@@ -688,7 +690,7 @@ impl<T: Float + FloatConst, P: internal::BiquadTopology<T>> ConfigurableFilter<T
     }
 }
 
-impl<T: Float + FloatConst, P: internal::BiquadTopology<T>> CommonConfigurableFilter<T>
+impl<T: FloatCore + Real + FloatConst, P: internal::BiquadTopology<T>> CommonConfigurableFilter<T>
     for BiquadFilter<T, P>
 {
     /// Sets the cutoff frequency, in Hz, of the filter. Defers to
@@ -724,7 +726,7 @@ impl<T: Float + FloatConst, P: internal::BiquadTopology<T>> CommonConfigurableFi
     }
 }
 
-impl<T: Float, P: internal::BiquadTopology<T>> Filter<T> for BiquadFilter<T, P> {
+impl<T: FloatCore + Real, P: internal::BiquadTopology<T>> Filter<T> for BiquadFilter<T, P> {
     fn apply(&mut self, input: T) -> T {
         self.topology.compute(input, &self.coeffs)
     }
