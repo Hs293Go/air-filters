@@ -410,6 +410,63 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_common_filter_config_default() {
+        let config = CommonFilterConfig::<f64>::default();
+        assert_eq!(config.cutoff_frequency_hz(), 10.0);
+        assert_eq!(config.sample_frequency_hz(), 100.0);
+
+        let config = CommonFilterConfig::<f64>::new();
+        assert_eq!(config.cutoff_frequency_hz(), 10.0);
+        assert_eq!(config.sample_frequency_hz(), 100.0);
+    }
+
+    #[test]
+    fn test_common_filter_config_setters() {
+        let mut config = CommonFilterConfig::<f64>::default();
+        assert!(config.set_cutoff_frequency_hz(20.0).is_ok());
+        assert_eq!(config.cutoff_frequency_hz(), 20.0);
+
+        assert!(config.set_sample_frequency_hz(200.0).is_ok());
+        assert_eq!(config.sample_frequency_hz(), 200.0);
+
+        assert!(config
+            .set_sample_loop_time(Duration::from_secs_f64(0.01))
+            .is_ok());
+        assert_eq!(config.sample_frequency_hz(), 100.0);
+
+        // Invalid values
+        assert_eq!(
+            config.set_cutoff_frequency_hz(-5.0).unwrap_err(),
+            Error::NonPositiveCutoffFrequency
+        );
+        assert_eq!(
+            config.set_sample_frequency_hz(0.0).unwrap_err(),
+            Error::NonPositiveSampleFrequency
+        );
+        assert_eq!(
+            config.set_sample_loop_time(Duration::ZERO).unwrap_err(),
+            Error::NonFiniteSampleFrequency
+        );
+        assert_eq!(
+            config.set_cutoff_frequency_hz(f64::NAN).unwrap_err(),
+            Error::NonFiniteCutoffFrequency
+        );
+        assert_eq!(
+            config.set_sample_frequency_hz(f64::INFINITY).unwrap_err(),
+            Error::NonFiniteSampleFrequency
+        );
+    }
+
+    #[cfg(any(feature = "alloc", feature = "std"))]
+    #[test]
+    fn test_boxed_filter() {
+        let mut filter: Box<dyn Filter<f64>> = Box::new(Mock::new());
+        assert_eq!(filter.apply(42.0), 42.0);
+        assert_eq!(filter.reset(100.0), Ok(()));
+        assert_eq!(filter.apply(7.0), 7.0);
+    }
+
     // ── ND filtering blanket impl ─────────────────────────────────────────────
 
     /// Axis i of the output equals the input applied to filter i.

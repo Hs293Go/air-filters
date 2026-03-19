@@ -137,10 +137,17 @@ mod tests {
         filter.apply(100.0);
 
         filter.reset(25.0).unwrap();
-        assert_eq!(filter.state, 25.0);
+        assert_eq!(filter.state(), 25.0);
         assert_eq!(filter.state1, 25.0);
 
         // Steady state check: apply 25.0 again, output should remain 25.0
+        assert_relative_eq!(filter.apply(25.0), 25.0);
+
+        // Reset to non-finite value should return an error and not change the state
+        assert_eq!(
+            filter.reset(f64::INFINITY).unwrap_err(),
+            Error::NonFiniteState
+        );
         assert_relative_eq!(filter.apply(25.0), 25.0);
     }
 

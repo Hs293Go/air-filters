@@ -35,6 +35,8 @@ check-thumbv7em-no-std-or-libm:
     cargo clippy --target thumbv7em-none-eabihf --no-default-features -- -D warnings
     cargo build --target thumbv7em-none-eabihf --no-default-features
 
+coverage:
+    cargo llvm-cov --html --open
 
 # Clean build artifacts
 clean:

@@ -171,6 +171,12 @@ mod tests {
         filter.set_sample_frequency_hz(2000.0).unwrap();
         assert!(filter.smoothing_constant() < initial_k);
         assert_eq!(filter.sample_frequency_hz(), 2000.0);
+
+        filter
+            .set_sample_loop_time(core::time::Duration::from_micros(500))
+            .unwrap();
+        assert!(filter.smoothing_constant() < initial_k);
+        assert_eq!(filter.sample_frequency_hz(), 2000.0); // sample frequency should not change when setting loop time
     }
 
     #[test]

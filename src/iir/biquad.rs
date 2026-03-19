@@ -325,7 +325,7 @@ impl<T: FloatCore + Real + FloatConst, P: internal::BiquadTopology<T>>
         let q = if let BiquadFilterType::LowPass = filter_type {
             T::FRAC_1_SQRT_2()
         } else {
-            self.q.unwrap_or_else(|| T::from(1.0).unwrap())
+            self.q.unwrap_or(T::FRAC_1_SQRT_2())
         };
 
         if !q.is_finite() {
@@ -675,11 +675,9 @@ impl<T: FloatCore + Real + FloatConst, P: internal::BiquadTopology<T>> Configura
 {
     fn update_configuration(&mut self) -> Result<(), Error> {
         // Recompute coefficients based on the current config
-        if self.config.cutoff_frequency_hz()
-            >= self.config.sample_frequency_hz() * T::from(0.5).unwrap()
-        {
-            return Err(Error::NyquistTheoremViolation);
-        }
+        debug_assert!(
+            self.config.cutoff_frequency_hz() < self.config.sample_frequency_hz() / t!(2)
+        );
 
         self.coeffs = Self::compute_coeffs(&self.config);
         Ok(())
@@ -761,6 +759,111 @@ mod tests {
     }
 
     #[test]
+    fn test_biquad_config_defaults() {
+        let config = DF1BiquadFilterConfig::<f64>::default();
+        assert_eq!(config.cutoff_frequency_hz(), 10.0);
+        assert_eq!(config.sample_frequency_hz(), 100.0);
+        assert_eq!(config.filter_type(), BiquadFilterType::LowPass);
+        assert_relative_eq!(config.quality_factor(), 1.0 / 2f64.sqrt(), epsilon = 1e-10);
+
+        let config = DF2BiquadFilterConfig::<f64>::default();
+        assert_eq!(config.cutoff_frequency_hz(), 10.0);
+        assert_eq!(config.sample_frequency_hz(), 100.0);
+        assert_eq!(config.filter_type(), BiquadFilterType::LowPass);
+        assert_relative_eq!(config.quality_factor(), 1.0 / 2f64.sqrt(), epsilon = 1e-10);
+
+        let config = DF1BiquadFilterConfig::<f64>::new();
+        assert_eq!(config.cutoff_frequency_hz(), 10.0);
+        assert_eq!(config.sample_frequency_hz(), 100.0);
+        assert_eq!(config.filter_type(), BiquadFilterType::LowPass);
+        assert_relative_eq!(config.quality_factor(), 1.0 / 2f64.sqrt(), epsilon = 1e-10);
+
+        let config = DF2BiquadFilterConfig::<f64>::new();
+        assert_eq!(config.cutoff_frequency_hz(), 10.0);
+        assert_eq!(config.sample_frequency_hz(), 100.0);
+        assert_eq!(config.filter_type(), BiquadFilterType::LowPass);
+        assert_relative_eq!(config.quality_factor(), 1.0 / 2f64.sqrt(), epsilon = 1e-10);
+    }
+
+    #[test]
+    fn test_biquad_config_build_quality_factor_validation() {
+        // Non-finite Q is rejected
+        let result = BiquadFilterConfigBuilder::direct_form_1()
+            .filter_type(BiquadFilterType::Notch)
+            .q(f64::INFINITY)
+            .build();
+        assert!(matches!(result, Err(Error::NonFiniteQualityFactor)));
+
+        // Non-positive Q is rejected
+        let result = BiquadFilterConfigBuilder::direct_form_1()
+            .filter_type(BiquadFilterType::Notch)
+            .q(-1.0)
+            .build();
+        assert!(matches!(result, Err(Error::NonPositiveQualityFactor)));
+    }
+
+    #[test]
+    fn test_biquad_config_quality_factor() {
+        let mut config = DF1BiquadFilterConfig::<f64>::new();
+        // Couldn't override Q for LowPass filter type
+        assert!(config.set_quality_factor(1.0).is_ok());
+        assert_relative_eq!(config.quality_factor(), 1.0 / 2f64.sqrt(), epsilon = 1e-10);
+        // Could override Q for Notch filter type
+        config.set_filter_type(BiquadFilterType::Notch);
+        assert!(config.set_quality_factor(1.0).is_ok());
+        assert_relative_eq!(config.quality_factor(), 1.0, epsilon = 1e-10);
+
+        // Setting filter type back to LowPass should override Q again
+        config.set_filter_type(BiquadFilterType::LowPass);
+        assert_relative_eq!(config.quality_factor(), 1.0 / 2f64.sqrt(), epsilon = 1e-10);
+    }
+    #[test]
+    fn test_biquad_config_invalid_quality_factor() {
+        let mut config = DF1BiquadFilterConfig::<f64>::new();
+        config.set_filter_type(BiquadFilterType::Notch);
+        // Non-finite Q is rejected
+        assert!(matches!(
+            config.set_quality_factor(f64::INFINITY),
+            Err(Error::NonFiniteQualityFactor)
+        ));
+
+        // Non-positive Q is rejected
+        assert!(matches!(
+            config.set_quality_factor(-1.0),
+            Err(Error::NonPositiveQualityFactor)
+        ));
+    }
+    #[test]
+    fn test_biquad_config_builder_defaults() {
+        let config = BiquadFilterConfigBuilder::<f64, _>::direct_form_1()
+            .build()
+            .unwrap();
+        assert_eq!(config.cutoff_frequency_hz(), 10.0);
+        assert_eq!(config.sample_frequency_hz(), 100.0);
+        assert_eq!(config.filter_type(), BiquadFilterType::LowPass);
+        assert_relative_eq!(config.quality_factor(), 1.0 / 2f64.sqrt(), epsilon = 1e-10);
+
+        let config = BiquadFilterConfigBuilder::<f64, _>::direct_form_2()
+            .build()
+            .unwrap();
+        assert_eq!(config.cutoff_frequency_hz(), 10.0);
+        assert_eq!(config.sample_frequency_hz(), 100.0);
+        assert_eq!(config.filter_type(), BiquadFilterType::LowPass);
+        assert_relative_eq!(config.quality_factor(), 1.0 / 2f64.sqrt(), epsilon = 1e-10);
+
+        // Default quality factor is still 1/sqrt(2) even if filter type is Notch and overriding is
+        // lifted
+        let config = BiquadFilterConfigBuilder::<f64, _>::direct_form_1()
+            .filter_type(BiquadFilterType::Notch)
+            .build()
+            .unwrap();
+        assert_eq!(config.cutoff_frequency_hz(), 10.0);
+        assert_eq!(config.sample_frequency_hz(), 100.0);
+        assert_eq!(config.filter_type(), BiquadFilterType::Notch);
+        assert_relative_eq!(config.quality_factor(), 1.0 / 2f64.sqrt(), epsilon = 1e-10);
+    }
+
+    #[test]
     fn test_biquad_lpf_coefficients() {
         let filter = BiquadFilter::new(df1_config());
         let c = &filter.coeffs;
@@ -771,6 +874,11 @@ mod tests {
         // a0 = 1 + alpha = 1.41562
         // b1 = (1 - cos(omega)) / a0 = (1 - 0.809017) / 1.41562 ≈ 0.1349
         assert_relative_eq!(c.b1, 0.1349, epsilon = 1e-4);
+    }
+    #[test]
+    fn test_touch_config_mut() {
+        let mut filter = BiquadFilter::new(df1_config());
+        assert!(filter.config_mut().set_cutoff_frequency_hz(1000.0).is_ok());
     }
 
     #[test]
@@ -796,11 +904,7 @@ mod tests {
             }
         }
         // Output should be near zero (high attenuation)
-        assert!(
-            max_output < 0.05,
-            "Notch failed to attenuate center frequency, got {}",
-            max_output
-        );
+        assert!(max_output < 0.05);
     }
 
     #[test]
@@ -856,6 +960,20 @@ mod tests {
     }
 
     // --- Nyquist enforcement tests ---
+    #[test]
+    fn test_nyquist_rejected_by_config() {
+        let mut config = DF1BiquadFilterConfig::new();
+        assert_eq!(
+            config.set_cutoff_frequency_hz(500.0).unwrap_err(),
+            Error::NyquistTheoremViolation
+        );
+
+        let mut config = DF2BiquadFilterConfig::new();
+        assert_eq!(
+            config.set_cutoff_frequency_hz(500.0).unwrap_err(),
+            Error::NyquistTheoremViolation
+        );
+    }
 
     #[test]
     fn test_nyquist_rejected_at_build() {
@@ -901,6 +1019,8 @@ mod tests {
         assert_eq!(filter.coeffs.b0, b0_before);
         assert_eq!(filter.coeffs.b1, b1_before);
         assert_eq!(filter.coeffs.b2, b2_before);
+
+        assert!(filter.set_cutoff_frequency_hz(499.9).is_ok());
     }
 
     #[test]
@@ -916,6 +1036,8 @@ mod tests {
 
         assert_eq!(filter.sample_frequency_hz(), 1000.0);
         assert_eq!(filter.coeffs.b0, b0_before);
+
+        assert!(filter.set_sample_frequency_hz(2000.0).is_ok());
     }
 
     #[test]
@@ -933,16 +1055,28 @@ mod tests {
 
         assert_eq!(filter.sample_frequency_hz(), 1000.0);
         assert_eq!(filter.coeffs.b0, b0_before);
+
+        assert!(filter
+            .set_sample_loop_time(Duration::from_millis(1))
+            .is_ok());
     }
 
     // --- DirectForm2 reset tests ---
 
     #[test]
-    fn test_df2_reset_steady_state() {
+    fn test_reset() {
         // After reset(s), the first apply(s) must return s exactly.
         let mut filter = BiquadFilter::new(df2_config());
         filter.reset(100.0).expect("DF2 reset failed");
         assert_relative_eq!(filter.apply(100.0), 100.0, epsilon = 1e-12);
+
+        assert_eq!(filter.reset(f64::NAN).unwrap_err(), Error::NonFiniteState);
+
+        let mut filter = BiquadFilter::new(df1_config());
+        filter.reset(100.0).expect("DF1 reset failed");
+        assert_relative_eq!(filter.apply(100.0), 100.0, epsilon = 1e-12);
+
+        assert_eq!(filter.reset(f64::NAN).unwrap_err(), Error::NonFiniteState);
     }
 
     #[test]

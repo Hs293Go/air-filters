@@ -125,13 +125,23 @@ mod tests {
     #[test]
     fn test_reset() {
         let mut filter = Pt3Filter::new(standard_config());
-        filter.reset(10.0).unwrap();
+        filter.apply(100.0);
 
-        assert_eq!(filter.state, 10.0);
-        assert_eq!(filter.state1, 10.0);
-        assert_eq!(filter.state2, 10.0);
+        filter.reset(25.0).unwrap();
+        assert_eq!(filter.state(), 25.0);
+        assert_eq!(filter.state1, 25.0);
+        assert_eq!(filter.state2, 25.0);
 
-        assert_relative_eq!(filter.apply(10.0), 10.0);
+        // Steady state check: apply 25.0 again, output should remain 25.0
+        assert_relative_eq!(filter.apply(25.0), 25.0);
+
+        // Reset to non-finite value should return an error and not change the state
+        assert_eq!(
+            filter.reset(f64::INFINITY).unwrap_err(),
+            Error::NonFiniteState
+        );
+
+        assert_relative_eq!(filter.apply(25.0), 25.0);
     }
 
     #[test]
