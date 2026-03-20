@@ -34,8 +34,11 @@ impl<T: FloatCore + Real + FloatConst> Pt3Filter<T> {
         }
     }
 
-    /// Returns the current state of the filter, which represents the output of the filter at the last applied input.
-    pub fn state(&self) -> T {
+    /// Returns the value returned by the most recent call to `apply`.
+    ///
+    /// # Details
+    /// This is the output of the third (output-side) stage in the cascade.
+    pub fn last_output(&self) -> T {
         self.state
     }
 
@@ -71,14 +74,13 @@ impl<T: FloatCore + Real> Filter<T> for Pt3Filter<T> {
         self.state
     }
 
-    /// Resets the filter state to the specified value. Returns an error if the state is not finite.
-    fn reset(&mut self, state: T) -> Result<(), Error> {
-        if !state.is_finite() {
+    fn reset(&mut self, steady_output: T) -> Result<(), Error> {
+        if !steady_output.is_finite() {
             return Err(Error::NonFiniteState);
         }
-        self.state = state;
-        self.state1 = state;
-        self.state2 = state;
+        self.state = steady_output;
+        self.state1 = steady_output;
+        self.state2 = steady_output;
         Ok(())
     }
 }
@@ -128,7 +130,8 @@ mod tests {
         filter.apply(100.0);
 
         filter.reset(25.0).unwrap();
-        assert_eq!(filter.state(), 25.0);
+        assert_eq!(filter.last_output(), 25.0);
+        // All three delay stages must be initialised to the reset value.
         assert_eq!(filter.state1, 25.0);
         assert_eq!(filter.state2, 25.0);
 

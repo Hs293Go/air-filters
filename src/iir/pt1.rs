@@ -55,8 +55,9 @@ impl<T: FloatCore + FloatConst> Pt1Filter<T> {
         }
     }
 
-    /// Returns the current state of the filter, which represents the output of the filter at the last applied input.
-    pub fn state(&self) -> T {
+    /// Returns the value returned by the most recent call to `apply`, and also the only internal
+    /// state of the filter.
+    pub fn last_output(&self) -> T {
         self.state
     }
 
@@ -70,18 +71,16 @@ impl<T: FloatCore + FloatConst> Pt1Filter<T> {
 }
 
 impl<T: FloatCore> Filter<T> for Pt1Filter<T> {
-    /// Applies the filter to the input sample and updates the internal state. The output is the new state.
     fn apply(&mut self, input: T) -> T {
         self.state = self.state + self.k * (input - self.state);
         self.state
     }
 
-    /// Resets the filter state to the specified value. Returns an error if the state is not finite.
-    fn reset(&mut self, state: T) -> Result<(), Error> {
-        if !state.is_finite() {
+    fn reset(&mut self, steady_output: T) -> Result<(), Error> {
+        if !steady_output.is_finite() {
             return Err(Error::NonFiniteState);
         }
-        self.state = state;
+        self.state = steady_output;
         Ok(())
     }
 }
@@ -108,7 +107,7 @@ mod tests {
         let filter = Pt1Filter::new(config);
 
         // state should start at zero
-        assert_eq!(filter.state(), 0.0);
+        assert_eq!(filter.last_output(), 0.0);
 
         // k calculation check:
         // RC = 1 / (2 * PI * 100) ≈ 0.0015915
@@ -140,7 +139,7 @@ mod tests {
 
         // Reset to 50.0
         filter.reset(50.0).expect("Reset should succeed");
-        assert_eq!(filter.state(), 50.0);
+        assert_eq!(filter.last_output(), 50.0);
 
         // Test non-finite reset
         let err = filter.reset(f64::NAN).unwrap_err();
@@ -189,7 +188,7 @@ mod tests {
             filter.apply(input);
         }
 
-        assert_relative_eq!(filter.state(), input, epsilon = 1e-10);
+        assert_relative_eq!(filter.last_output(), input, epsilon = 1e-10);
     }
 
     // --- Nyquist tolerance tests ---

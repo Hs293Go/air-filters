@@ -108,13 +108,19 @@ pub enum Error {
 /// };
 /// ```
 pub trait Filter<T> {
-    /// Applies the filter to the input sample and updates the internal state. The output is the new state.
+    /// Applies the filter to the input sample, updates internal state, and returns the new output.
+    ///
+    /// This function is not expected to do error checking on the input value.
     fn apply(&mut self, input: T) -> T;
 
-    /// Resets the filter state to the specified value. Returns an error if the state is not finite.
+    /// Initializes the filter to the steady-state condition for a constant output of
+    /// `steady_output`. After a successful reset, the next call to `apply` with the same value
+    /// will return that value unchanged.
     ///
-    /// Implementers should ensure that if resetting fails, the filter's state is not modified.
-    fn reset(&mut self, state: T) -> Result<(), Error>;
+    /// Implementers should return [`Error::NonFiniteState`] if `steady_output` is not finite,
+    /// leaving the filter state unmodified.
+    fn reset(&mut self, steady_output: T) -> Result<(), Error>;
+}
 }
 
 impl<F: Filter<T>, T: FloatCore, const N: usize> Filter<[T; N]> for [F; N] {
@@ -125,13 +131,12 @@ impl<F: Filter<T>, T: FloatCore, const N: usize> Filter<[T; N]> for [F; N] {
         core::array::from_fn(|i| self[i].apply(input[i]))
     }
 
-    /// Resets each filter in the array to the corresponding state in the input array. If any reset
-    /// fails, an error is returned and subsequent filters are not reset.
-    ///
-    /// If `Filter::reset` of an individual filter may mutate its state before returning an error,
-    /// this method may leave the array of filters in a partially reset state.
-    fn reset(&mut self, state: [T; N]) -> Result<(), Error> {
-        for (f, s) in self.iter_mut().zip(state) {
+    /// Resets each filter to the steady-state condition for the corresponding element of
+    /// `steady_output`. Stops and returns an error on the first failure; filters after that
+    /// index are not reset and the array may be left partially reset if implementers do not take
+    /// care to avoid mutating state before validating the input.
+    fn reset(&mut self, steady_output: [T; N]) -> Result<(), Error> {
+        for (f, s) in self.iter_mut().zip(steady_output) {
             f.reset(s)?;
         }
         Ok(())
@@ -144,8 +149,8 @@ impl<T: FloatCore> Filter<T> for Box<dyn Filter<T>> {
         (**self).apply(input)
     }
 
-    fn reset(&mut self, state: T) -> Result<(), Error> {
-        (**self).reset(state)
+    fn reset(&mut self, steady_output: T) -> Result<(), Error> {
+        (**self).reset(steady_output)
     }
 }
 
@@ -155,8 +160,8 @@ impl<T: FloatCore> Filter<T> for Box<dyn Filter<T> + Send> {
         (**self).apply(input)
     }
 
-    fn reset(&mut self, state: T) -> Result<(), Error> {
-        (**self).reset(state)
+    fn reset(&mut self, steady_output: T) -> Result<(), Error> {
+        (**self).reset(steady_output)
     }
 }
 
@@ -166,8 +171,8 @@ impl<T: FloatCore> Filter<T> for Box<dyn Filter<T> + Send + Sync> {
         (**self).apply(input)
     }
 
-    fn reset(&mut self, state: T) -> Result<(), Error> {
-        (**self).reset(state)
+    fn reset(&mut self, steady_output: T) -> Result<(), Error> {
+        (**self).reset(steady_output)
     }
 }
 
@@ -401,11 +406,11 @@ mod tests {
             self.state
         }
 
-        fn reset(&mut self, state: T) -> Result<(), Error> {
-            if !state.is_finite() {
+        fn reset(&mut self, steady_output: T) -> Result<(), Error> {
+            if !steady_output.is_finite() {
                 return Err(Error::NonFiniteState);
             }
-            self.state = state;
+            self.state = steady_output;
             Ok(())
         }
     }

@@ -746,8 +746,10 @@ impl<T: FloatCore + Real, P: internal::BiquadTopology<T>> Filter<T> for BiquadFi
         self.topology.compute(input, &self.coeffs)
     }
 
-    fn reset(&mut self, state: T) -> Result<(), Error> {
-        self.topology.reset(state, &self.coeffs)
+    fn reset(&mut self, steady_output: T) -> Result<(), Error> {
+        self.topology.reset(steady_output, &self.coeffs)
+    }
+}
     }
 }
 
