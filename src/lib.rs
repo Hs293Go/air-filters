@@ -154,28 +154,6 @@ impl<T: FloatCore> Filter<T> for Box<dyn Filter<T>> {
     }
 }
 
-#[cfg(feature = "alloc")]
-impl<T: FloatCore> Filter<T> for Box<dyn Filter<T> + Send> {
-    fn apply(&mut self, input: T) -> T {
-        (**self).apply(input)
-    }
-
-    fn reset(&mut self, steady_output: T) -> Result<(), Error> {
-        (**self).reset(steady_output)
-    }
-}
-
-#[cfg(feature = "alloc")]
-impl<T: FloatCore> Filter<T> for Box<dyn Filter<T> + Send + Sync> {
-    fn apply(&mut self, input: T) -> T {
-        (**self).apply(input)
-    }
-
-    fn reset(&mut self, steady_output: T) -> Result<(), Error> {
-        (**self).reset(steady_output)
-    }
-}
-
 mod internal {
     use super::*;
 
