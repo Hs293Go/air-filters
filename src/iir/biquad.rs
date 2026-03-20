@@ -44,13 +44,41 @@
 //! let output = filter.apply(1.0);
 //! ```
 
-use core::{marker::PhantomData, time::Duration};
+use core::{marker::PhantomData, ops::Index, time::Duration};
 
 use crate::{
     internal::ConfigurableFilter, CommonConfigurableFilter, CommonFilterConfig,
     CommonFilterConfigBuilder, Error, Filter,
 };
 use num_traits::{float::FloatCore, real::Real, FloatConst};
+
+#[derive(Debug, Clone)]
+struct SimpleRingBuf<T: Copy, const N: usize> {
+    buffer: [T; N],
+    index: usize,
+}
+
+impl<T: Copy, const N: usize> SimpleRingBuf<T, N> {
+    pub fn new(initial_value: T) -> Self {
+        Self {
+            buffer: [initial_value; N],
+            index: 0,
+        }
+    }
+
+    pub fn push_front(&mut self, value: T) {
+        self.index = (self.index + N - 1) % N;
+        self.buffer[self.index] = value;
+    }
+}
+
+impl<T: Copy, const N: usize> Index<usize> for SimpleRingBuf<T, N> {
+    type Output = T;
+
+    fn index(&self, idx: usize) -> &Self::Output {
+        &self.buffer[(self.index + idx) % N]
+    }
+}
 
 /// Supported biquad filter types. Each type corresponds to a specific transfer function and frequency response:
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -505,19 +533,15 @@ pub type DF2BiquadFilter<T> = BiquadFilter<T, DirectForm2<T>>;
 /// and uses half the delay-line registers.
 #[derive(Debug, Clone)]
 pub struct DirectForm1<T: FloatCore + Real> {
-    x1: T,
-    x2: T,
-    y1: T,
-    y2: T,
+    x: SimpleRingBuf<T, 2>,
+    y: SimpleRingBuf<T, 2>,
 }
 
 impl<T: FloatCore + Real> Default for DirectForm1<T> {
     fn default() -> Self {
         Self {
-            x1: t!(0),
-            x2: t!(0),
-            y1: t!(0),
-            y2: t!(0),
+            x: SimpleRingBuf::new(t!(0)),
+            y: SimpleRingBuf::new(t!(0)),
         }
     }
 }
@@ -530,17 +554,12 @@ impl<T: FloatCore + Real> internal::BiquadTopology<T> for DirectForm1<T> {
     /// change between calls introduces no transient — the new coefficients are simply
     /// applied to the existing historical samples on the next evaluation.
     fn compute(&mut self, input: T, coeffs: &internal::BiquadFilterCoefficients<T>) -> T {
-        let result = coeffs.b0 * input + coeffs.b1 * self.x1 + coeffs.b2 * self.x2
-            - coeffs.a1 * self.y1
-            - coeffs.a2 * self.y2;
+        let result = coeffs.b0 * input + coeffs.b1 * self.x[0] + coeffs.b2 * self.x[1]
+            - coeffs.a1 * self.y[0]
+            - coeffs.a2 * self.y[1];
 
-        // shift x1 to x2, input to x1
-        self.x2 = self.x1;
-        self.x1 = input;
-
-        // shift y1 to y2, result to y1
-        self.y2 = self.y1;
-        self.y1 = result;
+        self.x.push_front(input);
+        self.y.push_front(result);
         result
     }
 
@@ -559,10 +578,8 @@ impl<T: FloatCore + Real> internal::BiquadTopology<T> for DirectForm1<T> {
         if !state.is_finite() {
             return Err(Error::NonFiniteState);
         }
-        self.x1 = state;
-        self.x2 = state;
-        self.y1 = state;
-        self.y2 = state;
+        self.x = SimpleRingBuf::new(state);
+        self.y = SimpleRingBuf::new(state);
         Ok(())
     }
 }
