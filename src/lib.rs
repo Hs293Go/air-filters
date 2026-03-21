@@ -688,6 +688,14 @@ mod tests {
             .build();
         assert!(success.is_ok());
 
+        // f_c = 0.6 * f_s, well above Nyquist, is tolerated by the common builder but rejected by
+        // the biquad builder
+        let success = CommonFilterConfigBuilder::new()
+            .cutoff_frequency_hz(600.0)
+            .sample_frequency_hz(1000.0)
+            .build();
+        assert!(success.is_ok());
+
         Ok(())
     }
 

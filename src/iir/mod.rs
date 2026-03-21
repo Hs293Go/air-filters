@@ -14,3 +14,6 @@ pub mod pt1;
 pub mod pt2;
 #[cfg(any(feature = "libm", feature = "std"))]
 pub mod pt3;
+
+#[cfg(test)]
+mod testing;

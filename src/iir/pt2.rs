@@ -128,7 +128,7 @@ impl<T: FloatCore + Real> FuncFilter<T> for Pt2Filter<T> {
 mod tests {
     use approx::assert_relative_eq;
 
-    use crate::CommonFilterConfigBuilder;
+    use crate::{iir::testing, CommonFilterConfigBuilder};
 
     use super::*;
 
@@ -221,49 +221,25 @@ mod tests {
         assert_eq!(filter.sample_frequency_hz(), 2000.0);
     }
 
-    // --- Frequency-response test ---
+    #[test]
+    fn test_dc_gain_unity() {
+        let filter = Pt2Filter::new(standard_config());
+        // After many samples of a constant input, state should converge to input
+        let input = 123.45;
+        testing::check_convergence_to_steady_state_input(filter, input);
+    }
 
     #[test]
     fn test_frequency_response_at_cutoff() {
-        // The order-correction factor (1/√(√2−1) ≈ 1.554) is designed so that
-        // the cascade of two first-order sections has its −3 dB point at exactly
-        // f_c in continuous time.  With a 1000:1 f_s/f_c ratio the discretisation
-        // error is < 0.4 %, keeping the measured gain within 1 % of 1/√2.
         let config = CommonFilterConfigBuilder::new()
             .cutoff_frequency_hz(100.0)
             .sample_frequency_hz(100_000.0)
             .build()
             .unwrap();
-        let mut filter = Pt2Filter::new(config);
-
-        let omega = 2.0 * core::f64::consts::PI * 100.0 / 100_000.0;
-        let n_settle = 10_000;
-        let n_measure = 2_000;
-
-        for i in 0..n_settle {
-            filter.apply((omega * i as f64).sin());
-        }
-        let mut peak = 0.0_f64;
-        for i in n_settle..n_settle + n_measure {
-            let out = filter.apply((omega * i as f64).sin()).abs();
-            if out > peak {
-                peak = out;
-            }
-        }
-
-        assert_relative_eq!(peak, core::f64::consts::FRAC_1_SQRT_2, epsilon = 0.01);
+        testing::test_frequency_response_at_cutoff(Pt2Filter::new(config));
     }
 
     // --- Nyquist tolerance tests ---
-
-    #[test]
-    fn test_nyquist_tolerance_build() {
-        assert!(CommonFilterConfigBuilder::new()
-            .cutoff_frequency_hz(600.0)
-            .sample_frequency_hz(1000.0)
-            .build()
-            .is_ok());
-    }
 
     #[test]
     fn test_nyquist_tolerance_set_cutoff() {
@@ -282,74 +258,32 @@ mod tests {
             .sample_frequency_hz(1000.0)
             .build()
             .unwrap();
-        let mut filter = Pt2Filter::new(config);
-
-        let input = 1.0;
-        let mut last_out = 0.0;
-        for _ in 0..500 {
-            last_out = filter.apply(input);
-        }
-        assert_relative_eq!(last_out, input, epsilon = 1e-6);
+        testing::check_convergence_to_steady_state_input(Pt2Filter::new(config), 1.0);
     }
 
     #[test]
     fn test_functional_stateful_equivalence() {
         let config = standard_config();
-        let mut stateful = Pt2Filter::new(config);
-        let stateless = Pt2Filter::new(config);
-        let mut ctx = Pt2FilterContext::default();
-
-        for &input in &[1.0_f64, 1.0, 1.0, 0.5, 0.0, -1.0, 0.0] {
-            let stateful_out = stateful.apply(input);
-            let (stateless_out, new_ctx) = stateless.apply_stateless(input, &ctx);
-            ctx = new_ctx;
-            assert_relative_eq!(stateful_out, stateless_out, epsilon = 1e-12);
-        }
+        testing::test_functional_stateful_equivalence(
+            Pt2Filter::new(config),
+            Pt2Filter::new(config),
+            Pt2FilterContext::default(),
+        );
     }
+
     #[test]
     fn test_stateless_context_independence() {
-        // Verify that two independent contexts running on the same filter object do not
-        // interfere with each other, and that the original context is not mutated.
-        let filter = Pt2Filter::new(standard_config());
-
-        let ctx_zero = Pt2FilterContext::default();
-
-        let (out_step, ctx_step) = filter.apply_stateless(1.0, &ctx_zero);
-        let (out_zero, _) = filter.apply_stateless(0.0, &ctx_zero);
-
-        // Step and zero inputs must produce different outputs
-        assert!(out_step != out_zero);
-
-        // The original context must be unmodified
-        assert_eq!(ctx_zero.last_output(), 0.0);
-        assert_eq!(ctx_zero.state1, 0.0);
-
-        // Continued application from ctx_step should reflect its accumulated state
-        let (out_step2, _) = filter.apply_stateless(1.0, &ctx_step);
-        let (out_from_zero2, _) = filter.apply_stateless(1.0, &ctx_zero);
-        assert!(out_step2 > out_from_zero2);
+        testing::test_stateless_context_independence(
+            Pt2Filter::new(standard_config()),
+            Pt2FilterContext::default(),
+        );
     }
 
     #[test]
     fn test_stateless_reset() {
-        let filter = Pt2Filter::new(standard_config());
-        let mut ctx = Pt2FilterContext::default();
-
-        // Apply some inputs to move away from the initial state
-        for _ in 0..10 {
-            let (out, new_ctx) = filter.apply_stateless(1.0, &ctx);
-            ctx = new_ctx;
-            assert!(out > 0.0);
-        }
-
-        ctx.reset(0.5).unwrap(); // Reset the context to a steady output
-        assert_eq!(ctx.last_output(), 0.5);
-
-        ctx.reset(f64::INFINITY).unwrap_err(); // Reset with non-finite value should error
-        assert_eq!(ctx.last_output(), 0.5); // State should remain unchanged after
-
-        // After reset, the output should reflect the new steady state
-        let (out_after_reset, _) = filter.apply_stateless(1.0, &ctx);
-        assert!(out_after_reset > 0.5);
+        testing::test_stateless_reset(
+            Pt2Filter::new(standard_config()),
+            Pt2FilterContext::default(),
+        );
     }
 }

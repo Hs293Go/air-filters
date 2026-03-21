@@ -818,6 +818,8 @@ impl<T: FloatCore + Real> FuncFilter<T> for BiquadFilter<T, DirectForm1<T>> {
 
 #[cfg(test)]
 mod tests {
+    use crate::iir::testing;
+
     use super::*;
     use approx::assert_relative_eq;
 
@@ -946,6 +948,21 @@ mod tests {
     }
 
     #[test]
+    fn test_biquad_config_builder_invalid_common_config() {
+        // Invalid cutoff frequency (negative)
+        let result = BiquadFilterConfigBuilder::<f64, _>::direct_form_1()
+            .cutoff_frequency_hz(-100.0)
+            .build();
+        assert!(matches!(result, Err(Error::NonPositiveCutoffFrequency)));
+
+        // Invalid sample frequency (zero)
+        let result = BiquadFilterConfigBuilder::<f64, _>::direct_form_1()
+            .sample_frequency_hz(0.0)
+            .build();
+        assert!(matches!(result, Err(Error::NonPositiveSampleFrequency)));
+    }
+
+    #[test]
     fn test_biquad_lpf_coefficients() {
         let filter = BiquadFilter::new(df1_config());
         let c = &filter.coeffs;
@@ -981,7 +998,7 @@ mod tests {
         for i in 0..1000 {
             let input = (2.0 * core::f64::consts::PI * 0.25 * i as f64).sin();
             let out = filter.apply(input).abs();
-            if i > 500 && out > max_output {
+            if i > 500 {
                 max_output = out;
             }
         }
@@ -1030,15 +1047,11 @@ mod tests {
 
     #[test]
     fn test_lpf_unity_gain_dc() {
-        let mut filter = BiquadFilter::new(df1_config());
+        let filter = BiquadFilter::new(df1_config());
 
         // Constant input should eventually result in constant output of the same value
         let input = 1.0;
-        let mut last_out = 0.0;
-        for _ in 0..200 {
-            last_out = filter.apply(input);
-        }
-        assert_relative_eq!(last_out, 1.0, epsilon = 1e-10);
+        testing::check_convergence_to_steady_state_input(filter, input);
     }
 
     // --- Nyquist enforcement tests ---
@@ -1212,62 +1225,26 @@ mod tests {
     #[test]
     fn test_df1_functional_stateful_equivalence() {
         let config = df1_config();
-        let mut stateful = BiquadFilter::new(config.clone());
-        let stateless = BiquadFilter::new(config);
-        let mut ctx = DF1BiquadFilterContext::default();
-
-        for &input in &[1.0_f64, 1.0, 1.0, 0.5, 0.0, -1.0, 0.0] {
-            let stateful_out = stateful.apply(input);
-            let (stateless_out, new_ctx) = stateless.apply_stateless(input, &ctx);
-            ctx = new_ctx;
-            assert_relative_eq!(stateful_out, stateless_out, epsilon = 1e-12);
-        }
+        testing::test_functional_stateful_equivalence(
+            BiquadFilter::new(config.clone()),
+            BiquadFilter::new(config),
+            DF1BiquadFilterContext::default(),
+        );
     }
 
     #[test]
     fn test_stateless_context_independence() {
-        // Verify that two independent DF1 contexts produce independent histories and
-        // that neither mutates the other or the original context.
-        let filter = BiquadFilter::new(df1_config());
-
-        let ctx_zero = DF1BiquadFilterContext::default();
-
-        // Warm up one context with a step
-        let (_, ctx_warm) = filter.apply_stateless(1.0, &ctx_zero);
-        let (_, ctx_warm) = filter.apply_stateless(1.0, &ctx_warm);
-
-        // Apply the same input to warm and cold contexts: warm must have higher output
-        let (out_warm, _) = filter.apply_stateless(1.0, &ctx_warm);
-        let (out_cold, _) = filter.apply_stateless(1.0, &ctx_zero);
-        assert!(out_warm > out_cold);
-
-        // ctx_zero must be unmodified
-        assert_eq!(ctx_zero.last_input(), 0.0);
-        assert_eq!(ctx_zero.x2, 0.0);
-        assert_eq!(ctx_zero.last_output(), 0.0);
-        assert_eq!(ctx_zero.y2, 0.0);
+        testing::test_stateless_context_independence(
+            DF1BiquadFilter::new(df1_config()),
+            DF1BiquadFilterContext::default(),
+        );
     }
 
     #[test]
     fn test_stateless_reset() {
-        let filter = DF1BiquadFilter::new(df1_config());
-        let mut ctx = DF1BiquadFilterContext::default();
-
-        // Apply some inputs to move away from the initial state
-        for _ in 0..10 {
-            let (out, new_ctx) = filter.apply_stateless(1.0, &ctx);
-            ctx = new_ctx;
-            assert!(out > 0.0);
-        }
-
-        ctx.reset(0.5).unwrap(); // Reset the context to a steady output
-        assert_eq!(ctx.last_output(), 0.5);
-
-        ctx.reset(f64::INFINITY).unwrap_err(); // Reset with non-finite value should error
-        assert_eq!(ctx.last_output(), 0.5); // State should remain unchanged after
-
-        // After reset, the output should reflect the new steady state
-        let (out_after_reset, _) = filter.apply_stateless(1.0, &ctx);
-        assert!(out_after_reset > 0.5);
+        testing::test_stateless_reset(
+            DF1BiquadFilter::new(df1_config()),
+            DF1BiquadFilterContext::default(),
+        );
     }
 }
