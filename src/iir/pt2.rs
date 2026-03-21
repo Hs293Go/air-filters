@@ -3,6 +3,7 @@ use num_traits::{float::FloatCore, real::Real, FloatConst};
 
 use crate::{
     internal::ConfigurableFilter, CommonConfigurableFilter, CommonFilterConfig, Error, Filter,
+    FilterContext, FuncFilter,
 };
 
 /// A second-order low-pass filter implemented as a cascade of two first-order filters.
@@ -77,6 +78,49 @@ impl<T: FloatCore + Real> Filter<T> for Pt2Filter<T> {
         self.state = steady_output;
         self.state1 = steady_output;
         Ok(())
+    }
+}
+
+/// Container for the internal states of [`Pt2Filter`], used for stateless operation through
+/// [`Pt2Filter::apply_stateless`].
+#[derive(Debug, Copy, Clone)]
+pub struct Pt2FilterContext<T: FloatCore + Real> {
+    state: T,  // The output of the second stage and the final output of the filter.
+    state1: T, // The output of the first stage and the intermediate state between the two stages.
+}
+
+impl<T: FloatCore + Real> Default for Pt2FilterContext<T> {
+    /// Returns a zero-initialised context, suitable for a cold start.
+    fn default() -> Self {
+        Self {
+            state: t!(0),
+            state1: t!(0),
+        }
+    }
+}
+
+impl<T: FloatCore + Real> FilterContext<T> for Pt2FilterContext<T> {
+    fn reset(&mut self, value: T) -> Result<(), Error> {
+        if !value.is_finite() {
+            return Err(Error::NonFiniteState);
+        }
+        self.state = value;
+        self.state1 = value;
+        Ok(())
+    }
+
+    fn last_output(&self) -> T {
+        self.state
+    }
+}
+
+impl<T: FloatCore + Real> FuncFilter<T> for Pt2Filter<T> {
+    type Context = Pt2FilterContext<T>;
+
+    fn apply_stateless(&self, input: T, context: &Self::Context) -> (T, Self::Context) {
+        let state1 = context.state1 + self.k * (input - context.state1);
+        let state = context.state + self.k * (state1 - context.state);
+        (state, Pt2FilterContext { state1, state })
     }
 }
 
@@ -246,5 +290,66 @@ mod tests {
             last_out = filter.apply(input);
         }
         assert_relative_eq!(last_out, input, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn test_functional_stateful_equivalence() {
+        let config = standard_config();
+        let mut stateful = Pt2Filter::new(config);
+        let stateless = Pt2Filter::new(config);
+        let mut ctx = Pt2FilterContext::default();
+
+        for &input in &[1.0_f64, 1.0, 1.0, 0.5, 0.0, -1.0, 0.0] {
+            let stateful_out = stateful.apply(input);
+            let (stateless_out, new_ctx) = stateless.apply_stateless(input, &ctx);
+            ctx = new_ctx;
+            assert_relative_eq!(stateful_out, stateless_out, epsilon = 1e-12);
+        }
+    }
+    #[test]
+    fn test_stateless_context_independence() {
+        // Verify that two independent contexts running on the same filter object do not
+        // interfere with each other, and that the original context is not mutated.
+        let filter = Pt2Filter::new(standard_config());
+
+        let ctx_zero = Pt2FilterContext::default();
+
+        let (out_step, ctx_step) = filter.apply_stateless(1.0, &ctx_zero);
+        let (out_zero, _) = filter.apply_stateless(0.0, &ctx_zero);
+
+        // Step and zero inputs must produce different outputs
+        assert!(out_step != out_zero);
+
+        // The original context must be unmodified
+        assert_eq!(ctx_zero.last_output(), 0.0);
+        assert_eq!(ctx_zero.state1, 0.0);
+
+        // Continued application from ctx_step should reflect its accumulated state
+        let (out_step2, _) = filter.apply_stateless(1.0, &ctx_step);
+        let (out_from_zero2, _) = filter.apply_stateless(1.0, &ctx_zero);
+        assert!(out_step2 > out_from_zero2);
+    }
+
+    #[test]
+    fn test_stateless_reset() {
+        let filter = Pt2Filter::new(standard_config());
+        let mut ctx = Pt2FilterContext::default();
+
+        // Apply some inputs to move away from the initial state
+        for _ in 0..10 {
+            let (out, new_ctx) = filter.apply_stateless(1.0, &ctx);
+            ctx = new_ctx;
+            assert!(out > 0.0);
+        }
+
+        ctx.reset(0.5).unwrap(); // Reset the context to a steady output
+        assert_eq!(ctx.last_output(), 0.5);
+
+        ctx.reset(f64::INFINITY).unwrap_err(); // Reset with non-finite value should error
+        assert_eq!(ctx.last_output(), 0.5); // State should remain unchanged after
+
+        // After reset, the output should reflect the new steady state
+        let (out_after_reset, _) = filter.apply_stateless(1.0, &ctx);
+        assert!(out_after_reset > 0.5);
     }
 }

@@ -48,7 +48,7 @@ use core::{marker::PhantomData, ops::Index, time::Duration};
 
 use crate::{
     internal::ConfigurableFilter, CommonConfigurableFilter, CommonFilterConfig,
-    CommonFilterConfigBuilder, Error, Filter,
+    CommonFilterConfigBuilder, Error, Filter, FilterContext, FuncFilter,
 };
 use num_traits::{float::FloatCore, real::Real, FloatConst};
 
@@ -391,8 +391,12 @@ impl<T: FloatCore + Real + FloatConst, P: internal::BiquadTopology<T>>
 ///
 /// Because `w` is derived through the feedback coefficients `a1` and `a2`, the stored
 /// delay elements encode input history *as seen through the current coefficients* — they
-/// are not raw signal samples. Changing `a1` or `a2` between samples invalidates the
-/// stored values, causing a transient glitch until the delay line flushes (two samples).
+/// are not raw signal samples. Therefore, the functional separation of state and parameters
+/// required for a [`FuncFilter`] implementation does not hold for this topology, and
+/// `BiquadFilter<T, DirectForm2<T>>` does not implement `FuncFilter<T>`.
+///
+/// Furthermore, changing `a1` or `a2` between samples invalidates the stored values, causing a
+/// transient glitch until the delay line flushes (two samples).
 ///
 /// # Applications
 ///
@@ -436,29 +440,26 @@ impl<T: FloatCore + Real> internal::BiquadTopology<T> for DirectForm2<T> {
     ///
     /// # Deviation from Betaflight
     ///
-    /// Betaflight's `filter.c` has no generic reset operation — each filter is
-    /// initialised to zero and never explicitly reset at runtime.  This
-    /// implementation diverges by deriving the correct internal state from the
-    /// current coefficients so that the filter produces `state` immediately on
-    /// the next call to [`BiquadFilter::apply`] with input `state`.
+    /// Betaflight's `filter.c` does not implement a reset function for their DF2T biquad.  This
+    /// implementation diverges by deriving the correct internal state from the current coefficients
+    /// so that the filter produces `state` immediately on the next call to [`BiquadFilter::apply`]
+    /// with input `state`.
     ///
-    /// At steady state with constant input `u` and output `s = G·u`
-    /// (`G = (b0+b1+b2)/(1+a1+a2)` is the DC gain):
+    /// At steady state with constant input `u` and output `s = G·u` (`G = (b0+b1+b2)/(1+a1+a2)` is
+    /// the DC gain):
     ///
     /// ```text
-    /// x1 = s - b0·u  =  (1 - b0/G) · s
-    /// x2 = b2·u - a2·s  =  (b2/G - a2) · s
+    /// x1 = s - b0·u  =  (1 - b0/G) · s x2 = b2·u - a2·s  =  (b2/G - a2) · s
     /// ```
     ///
-    /// For unity-DC-gain filter types (LowPass, Notch) this simplifies to
-    /// `x1 = (1-b0)·s` and `x2 = (b2-a2)·s`.
+    /// For unity-DC-gain filter types (LowPass, Notch) this simplifies to `x1 = (1-b0)·s` and `x2 =
+    /// (b2-a2)·s`.
     ///
     /// # BandPass edge case
     ///
-    /// BandPass filters have zero DC gain (`b0+b1+b2 = 0`), so no finite
-    /// constant input produces a nonzero constant output.  Resetting to a
-    /// nonzero `state` is therefore undefined; the delay line is zeroed and
-    /// `Ok(())` is returned.
+    /// BandPass filters have zero DC gain (`b0+b1+b2 = 0`), so no finite constant input produces a
+    /// nonzero constant output.  Resetting to a nonzero `state` is therefore undefined; the delay
+    /// line is zeroed and `Ok(())` is returned.
     fn reset(
         &mut self,
         state: T,
@@ -750,6 +751,68 @@ impl<T: FloatCore + Real, P: internal::BiquadTopology<T>> Filter<T> for BiquadFi
         self.topology.reset(steady_output, &self.coeffs)
     }
 }
+
+/// Container for the internal states of a [`DF1BiquadFilter`], used for stateless application.
+///
+/// `x1`, `x2` hold past input samples; `y1`, `y2` hold past output samples.
+#[derive(Debug, Copy, Clone)]
+pub struct DF1BiquadFilterContext<T: FloatCore + Real> {
+    /// `x[n−1]`: most recent past input sample.
+    x1: T,
+    /// `x[n−2]`: second most recent past input sample.
+    x2: T,
+    /// `y[n−1]`: most recent past output sample.
+    y1: T,
+    /// `y[n−2]`: second most recent past output sample.
+    y2: T,
+}
+
+impl<T: FloatCore + Real> Default for DF1BiquadFilterContext<T> {
+    /// Returns a zero-initialised context, suitable for a cold start.
+    fn default() -> Self {
+        Self {
+            x1: t!(0),
+            x2: t!(0),
+            y1: t!(0),
+            y2: t!(0),
+        }
+    }
+}
+
+impl<T: FloatCore + Real> FilterContext<T> for DF1BiquadFilterContext<T> {
+    fn reset(&mut self, value: T) -> Result<(), Error> {
+        if !value.is_finite() {
+            return Err(Error::NonFiniteState);
+        }
+
+        self.x1 = value;
+        self.x2 = value;
+        self.y1 = value;
+        self.y2 = value;
+        Ok(())
+    }
+
+    fn last_output(&self) -> T {
+        self.y1
+    }
+}
+
+impl<T: FloatCore + Real> FuncFilter<T> for BiquadFilter<T, DirectForm1<T>> {
+    type Context = DF1BiquadFilterContext<T>;
+
+    fn apply_stateless(&self, input: T, ctx: &Self::Context) -> (T, Self::Context) {
+        let result = self.coeffs.b0 * input + self.coeffs.b1 * ctx.x1 + self.coeffs.b2 * ctx.x2
+            - self.coeffs.a1 * ctx.y1
+            - self.coeffs.a2 * ctx.y2;
+        (
+            result,
+            DF1BiquadFilterContext {
+                x1: input,
+                x2: ctx.x1,
+                y1: result,
+                y2: ctx.y1,
+            },
+        )
     }
 }
 
@@ -1142,5 +1205,69 @@ mod tests {
         // Delay line must have been zeroed: with zero initial state the first
         // output for a zero input is zero.
         assert_eq!(filter.apply(0.0), 0.0);
+    }
+
+    // --- Functional (stateless) tests ---
+
+    #[test]
+    fn test_df1_functional_stateful_equivalence() {
+        let config = df1_config();
+        let mut stateful = BiquadFilter::new(config.clone());
+        let stateless = BiquadFilter::new(config);
+        let mut ctx = DF1BiquadFilterContext::default();
+
+        for &input in &[1.0_f64, 1.0, 1.0, 0.5, 0.0, -1.0, 0.0] {
+            let stateful_out = stateful.apply(input);
+            let (stateless_out, new_ctx) = stateless.apply_stateless(input, &ctx);
+            ctx = new_ctx;
+            assert_relative_eq!(stateful_out, stateless_out, epsilon = 1e-12);
+        }
+    }
+
+    #[test]
+    fn test_stateless_context_independence() {
+        // Verify that two independent DF1 contexts produce independent histories and
+        // that neither mutates the other or the original context.
+        let filter = BiquadFilter::new(df1_config());
+
+        let ctx_zero = DF1BiquadFilterContext::default();
+
+        // Warm up one context with a step
+        let (_, ctx_warm) = filter.apply_stateless(1.0, &ctx_zero);
+        let (_, ctx_warm) = filter.apply_stateless(1.0, &ctx_warm);
+
+        // Apply the same input to warm and cold contexts: warm must have higher output
+        let (out_warm, _) = filter.apply_stateless(1.0, &ctx_warm);
+        let (out_cold, _) = filter.apply_stateless(1.0, &ctx_zero);
+        assert!(out_warm > out_cold);
+
+        // ctx_zero must be unmodified
+        assert_eq!(ctx_zero.last_input(), 0.0);
+        assert_eq!(ctx_zero.x2, 0.0);
+        assert_eq!(ctx_zero.last_output(), 0.0);
+        assert_eq!(ctx_zero.y2, 0.0);
+    }
+
+    #[test]
+    fn test_stateless_reset() {
+        let filter = DF1BiquadFilter::new(df1_config());
+        let mut ctx = DF1BiquadFilterContext::default();
+
+        // Apply some inputs to move away from the initial state
+        for _ in 0..10 {
+            let (out, new_ctx) = filter.apply_stateless(1.0, &ctx);
+            ctx = new_ctx;
+            assert!(out > 0.0);
+        }
+
+        ctx.reset(0.5).unwrap(); // Reset the context to a steady output
+        assert_eq!(ctx.last_output(), 0.5);
+
+        ctx.reset(f64::INFINITY).unwrap_err(); // Reset with non-finite value should error
+        assert_eq!(ctx.last_output(), 0.5); // State should remain unchanged after
+
+        // After reset, the output should reflect the new steady state
+        let (out_after_reset, _) = filter.apply_stateless(1.0, &ctx);
+        assert!(out_after_reset > 0.5);
     }
 }

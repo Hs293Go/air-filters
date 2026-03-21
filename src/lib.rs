@@ -121,9 +121,78 @@ pub trait Filter<T> {
     /// leaving the filter state unmodified.
     fn reset(&mut self, steady_output: T) -> Result<(), Error>;
 }
+
+/// Trait for the external state container threaded through [`FuncFilter::apply_stateless`].
+///
+/// Every context must be [`Copy`] (cheap to snapshot or branch) and [`Default`] (zero-initialised
+/// cold start). The [`FilterContext::reset`] method provides a warm start from an arbitrary
+/// steady-state value.
+pub trait FilterContext<T>: Copy + Default {
+    /// Resets the context initialised to the steady-state condition for a constant output of
+    /// `steady_output`. After a successful call, passing `steady_output` to
+    /// [`FuncFilter::apply_stateless`] with this context will return that value unchanged.
+    ///
+    /// Returns [`Error::NonFiniteState`] if `steady_output` is not finite.
+    fn reset(&mut self, steady_output: T) -> Result<(), Error>;
+
+    /// Returns the last output value associated with this context.
+    fn last_output(&self) -> T;
 }
 
-impl<F: Filter<T>, T: FloatCore, const N: usize> Filter<[T; N]> for [F; N] {
+impl<C: FilterContext<T>, T: Copy, const N: usize> FilterContext<[T; N]> for [C; N]
+where
+    [C; N]: Default,
+{
+    fn reset(&mut self, steady_output: [T; N]) -> Result<(), Error> {
+        for (ctx, y) in self.iter_mut().zip(steady_output) {
+            ctx.reset(y)?;
+        }
+        Ok(())
+    }
+
+    fn last_output(&self) -> [T; N] {
+        core::array::from_fn(|i| self[i].last_output())
+    }
+}
+
+/// Trait for filters that support a functional style of programming by not using mutable state.
+///
+/// Instead of storing state internally, the filter's state is threaded through a [`Copy`]able
+/// [`FuncFilter::Context`] value that is passed in and returned on each call to
+/// [`apply_stateless`](FuncFilter::apply_stateless).
+///
+/// # Example
+/// ```rust
+/// use air_filters::iir::pt1::{Pt1Filter, Pt1FilterContext};
+/// use air_filters::{CommonFilterConfigBuilder, FuncFilter};
+///
+/// let filter = Pt1Filter::new(
+///     CommonFilterConfigBuilder::new()
+///         .cutoff_frequency_hz(100.0)
+///         .sample_frequency_hz(1000.0)
+///         .build()
+///         .unwrap(),
+/// );
+///
+/// let mut ctx = Pt1FilterContext::default();
+/// let (output, ctx) = filter.apply_stateless(1.0, &ctx);
+/// ```
+pub trait FuncFilter<T>: Filter<T> {
+    /// External state container for this filter. Must satisfy [`FilterContext<T>`], which
+    /// requires [`Copy`] (cheap to snapshot or branch across streams), [`Default`] (cold start),
+    /// and [`FilterContext::reset`] (warm start from a steady-state value).
+    type Context: FilterContext<T>;
+
+    /// Applies the filter to `input` without modifying internal state. Returns the filtered
+    /// output and the updated context; the original context is left unchanged.
+    ///
+    /// The returned context must not be discarded: dropping it silently loses the updated
+    /// filter state.
+    #[must_use]
+    fn apply_stateless(&self, input: T, ctx: &Self::Context) -> (T, Self::Context);
+}
+
+impl<F: Filter<T>, T: Copy, const N: usize> Filter<[T; N]> for [F; N] {
     /// Applies each filter in the array to the corresponding element of the input array, returning
     /// an array of outputs. The state of each filter is updated independently based on its own
     /// input.
@@ -140,6 +209,24 @@ impl<F: Filter<T>, T: FloatCore, const N: usize> Filter<[T; N]> for [F; N] {
             f.reset(s)?;
         }
         Ok(())
+    }
+}
+
+impl<F: FuncFilter<T>, T: Copy, const N: usize> FuncFilter<[T; N]> for [F; N]
+where
+    [F::Context; N]: FilterContext<[T; N]>,
+{
+    type Context = [F::Context; N];
+
+    fn apply_stateless(&self, input: [T; N], ctx: &[F::Context; N]) -> ([T; N], [F::Context; N]) {
+        let mut outputs = input;
+        let mut new_ctxs = *ctx;
+        for (i, filt) in self.iter().enumerate() {
+            let (out, c) = filt.apply_stateless(input[i], &ctx[i]);
+            outputs[i] = out;
+            new_ctxs[i] = c;
+        }
+        (outputs, new_ctxs)
     }
 }
 
@@ -380,8 +467,8 @@ mod tests {
 
     impl<T: FloatCore> Filter<T> for Mock<T> {
         fn apply(&mut self, input: T) -> T {
-            self.state = input;
-            self.state
+            self.state = self.state + input;
+            input
         }
 
         fn reset(&mut self, steady_output: T) -> Result<(), Error> {
@@ -390,6 +477,38 @@ mod tests {
             }
             self.state = steady_output;
             Ok(())
+        }
+    }
+
+    /// Minimal context for `Mock`: accumulates all inputs since construction or last reset.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    struct MockCtx<T: FloatCore>(T);
+
+    impl<T: FloatCore> Default for MockCtx<T> {
+        fn default() -> Self {
+            Self(T::zero())
+        }
+    }
+
+    impl<T: FloatCore> FilterContext<T> for MockCtx<T> {
+        fn reset(&mut self, steady_output: T) -> Result<(), Error> {
+            if !steady_output.is_finite() {
+                return Err(Error::NonFiniteState);
+            }
+            self.0 = steady_output;
+            Ok(())
+        }
+
+        fn last_output(&self) -> T {
+            self.0
+        }
+    }
+
+    impl<T: FloatCore> FuncFilter<T> for Mock<T> {
+        type Context = MockCtx<T>;
+
+        fn apply_stateless(&self, input: T, ctx: &MockCtx<T>) -> (T, MockCtx<T>) {
+            (input, MockCtx(ctx.0 + input))
         }
     }
 
@@ -581,5 +700,78 @@ mod tests {
         let config = CommonFilterConfig::try_from(builder);
         assert!(config.is_ok());
         assert_eq!(config.unwrap().cutoff_frequency_hz, 5.0);
+    }
+
+    #[test]
+    fn test_filter_context_reset() {
+        let mut ctx = MockCtx::<f64>::default();
+        ctx.reset(42.0).unwrap();
+        assert_eq!(ctx, MockCtx(42.0));
+
+        assert_eq!(ctx.reset(f64::NAN).unwrap_err(), Error::NonFiniteState);
+    }
+
+    #[test]
+    fn nd_func_apply_stateless_dispatches_per_axis() {
+        let filters: [Mock<f64>; 3] = core::array::from_fn(|_| Mock::new());
+        let ctx = [MockCtx(0.0_f64); 3];
+
+        let (outputs, new_ctx) = filters.apply_stateless([1.0, 2.0, 3.0], &ctx);
+        assert_eq!(outputs, [1.0, 2.0, 3.0]);
+        assert_eq!(new_ctx, [MockCtx(1.0), MockCtx(2.0), MockCtx(3.0)]);
+        assert_eq!(
+            ctx.last_output(),
+            [0.0, 0.0, 0.0],
+            "original context should be unchanged"
+        );
+        assert_eq!(
+            new_ctx.last_output(),
+            [1.0, 2.0, 3.0],
+            "original context should be unchanged"
+        );
+    }
+
+    #[test]
+    fn nd_func_axes_are_independent() {
+        let filters: [Mock<f64>; 3] = core::array::from_fn(|_| Mock::new());
+        let ctx = [MockCtx(0.0_f64); 3];
+
+        let (_, ctx1) = filters.apply_stateless([1.0, 0.0, 0.0], &ctx);
+        let (_, ctx2) = filters.apply_stateless([0.0, 2.0, 0.0], &ctx);
+
+        // Each context tracks only its own stream.
+        assert_eq!(ctx1, [MockCtx(1.0), MockCtx(0.0), MockCtx(0.0)]);
+        assert_eq!(ctx2, [MockCtx(0.0), MockCtx(2.0), MockCtx(0.0)]);
+    }
+
+    #[test]
+    fn nd_func_reset_context_distributes_to_all_axes() {
+        let mut ctx = [MockCtx(0.0_f64); 3];
+        ctx.reset([10.0, -20.0, 0.5]).unwrap();
+        assert_eq!(ctx, [MockCtx(10.0), MockCtx(-20.0), MockCtx(0.5)]);
+    }
+
+    #[test]
+    fn nd_func_reset_context_fails_on_non_finite() {
+        let mut ctx = [MockCtx(0.0_f64); 3];
+        let err = ctx.reset([0.0, f64::NAN, 99.0]).unwrap_err();
+        assert_eq!(err, Error::NonFiniteState);
+    }
+
+    #[test]
+    fn test_stateful_stateless_filter_equivalence() {
+        let mut filter = Mock::new();
+        let input = 3.0_f64;
+        let ctx = MockCtx(2.0_f64);
+
+        // Apply stateful filter
+        let stateful_output = filter.apply(input);
+        assert_eq!(stateful_output, input);
+        assert_eq!(filter.state, input);
+
+        // Apply stateless filter with the same input and context
+        let (stateless_output, new_ctx) = filter.apply_stateless(input, &ctx);
+        assert_eq!(stateless_output, input);
+        assert_eq!(new_ctx, MockCtx(ctx.0 + input));
     }
 }

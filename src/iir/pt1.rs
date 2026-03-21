@@ -13,6 +13,7 @@ use num_traits::{float::FloatCore, FloatConst};
 
 use crate::{
     internal::ConfigurableFilter, CommonConfigurableFilter, CommonFilterConfig, Error, Filter,
+    FilterContext, FuncFilter,
 };
 
 /// A 1st-order low-pass filter implemented using the forward Euler method for discretization.
@@ -82,6 +83,41 @@ impl<T: FloatCore> Filter<T> for Pt1Filter<T> {
         }
         self.state = steady_output;
         Ok(())
+    }
+}
+
+/// Container for the internal states of [`Pt1Filter`], used for stateless operation through
+/// [`Pt1Filter::apply_stateless`].
+#[derive(Debug, Clone, Copy)]
+pub struct Pt1FilterContext<T: FloatCore>(T);
+
+impl<T: FloatCore> Default for Pt1FilterContext<T> {
+    /// Returns a zero-initialised context, suitable for a cold start.
+    fn default() -> Self {
+        Self(t!(0))
+    }
+}
+
+impl<T: FloatCore> FilterContext<T> for Pt1FilterContext<T> {
+    fn reset(&mut self, steady_output: T) -> Result<(), Error> {
+        if !steady_output.is_finite() {
+            return Err(Error::NonFiniteState);
+        }
+        self.0 = steady_output;
+        Ok(())
+    }
+
+    fn last_output(&self) -> T {
+        self.0
+    }
+}
+
+impl<T: FloatCore> FuncFilter<T> for Pt1Filter<T> {
+    type Context = Pt1FilterContext<T>;
+
+    fn apply_stateless(&self, input: T, context: &Self::Context) -> (T, Self::Context) {
+        let state = context.0 + self.k * (input - context.0);
+        (state, Pt1FilterContext(state))
     }
 }
 
@@ -264,5 +300,67 @@ mod tests {
             last_out = filter.apply(input);
         }
         assert_relative_eq!(last_out, input, epsilon = 1e-6);
+    }
+
+    #[test]
+    fn test_functional_stateful_equivalence() {
+        let config = standard_config();
+        let mut stateful = Pt1Filter::new(config);
+        let stateless = Pt1Filter::new(config);
+        let mut ctx = Pt1FilterContext::default();
+
+        for &input in &[1.0_f64, 1.0, 1.0, 0.5, 0.0, -1.0, 0.0] {
+            let stateful_out = stateful.apply(input);
+            let (stateless_out, new_ctx) = stateless.apply_stateless(input, &ctx);
+            ctx = new_ctx;
+            assert_relative_eq!(stateful_out, stateless_out, epsilon = 1e-12);
+            assert_relative_eq!(stateful.last_output(), ctx.last_output(), epsilon = 1e-12);
+        }
+    }
+
+    #[test]
+    fn test_stateless_context_independence() {
+        // Verify that two independent contexts running on the same filter object do not
+        // interfere with each other, and that the original context is not mutated.
+        let filter = Pt1Filter::new(standard_config());
+
+        let ctx_zero = Pt1FilterContext::default();
+
+        let (out_step, ctx_step) = filter.apply_stateless(1.0, &ctx_zero);
+        let (out_zero, _) = filter.apply_stateless(0.0, &ctx_zero);
+
+        // Step and zero inputs must produce different outputs
+        assert!(out_step != out_zero);
+
+        // The original context must be unmodified
+        assert_eq!(ctx_zero.last_output(), 0.0);
+
+        // Continued application from ctx_step should reflect its accumulated state
+        let (out_step2, _) = filter.apply_stateless(1.0, &ctx_step);
+        let (out_from_zero2, _) = filter.apply_stateless(1.0, &ctx_zero);
+        assert!(out_step2 > out_from_zero2);
+    }
+
+    #[test]
+    fn test_stateless_reset() {
+        let filter = Pt1Filter::new(standard_config());
+        let mut ctx = Pt1FilterContext::default();
+
+        // Apply some inputs to move away from the initial state
+        for _ in 0..10 {
+            let (out, new_ctx) = filter.apply_stateless(1.0, &ctx);
+            ctx = new_ctx;
+            assert!(out > 0.0);
+        }
+
+        ctx.reset(0.5).unwrap(); // Reset the context to a steady output
+        assert_eq!(ctx.last_output(), 0.5);
+
+        ctx.reset(f64::INFINITY).unwrap_err(); // Reset with non-finite value should error
+        assert_eq!(ctx.last_output(), 0.5); // State should remain unchanged after
+
+        // After reset, the output should reflect the new steady state
+        let (out_after_reset, _) = filter.apply_stateless(1.0, &ctx);
+        assert!(out_after_reset > 0.5);
     }
 }
