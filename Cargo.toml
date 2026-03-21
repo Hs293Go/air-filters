@@ -26,3 +26,8 @@ plotters = { version = "0.3", default-features = false, features = [
   "line_series",
 ] }
 clap = { version = "4.6.0", features = ["derive"] }
+
+[package.metadata.release]
+publish = false
+push = true
+tag = true
