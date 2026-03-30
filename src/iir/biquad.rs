@@ -44,7 +44,7 @@
 //! let output = filter.apply(1.0);
 //! ```
 
-use core::{marker::PhantomData, ops::Index, time::Duration};
+use core::{marker::PhantomData, time::Duration};
 
 use crate::{
     internal::ConfigurableFilter, CommonConfigurableFilter, CommonFilterConfig,
@@ -52,35 +52,10 @@ use crate::{
 };
 use num_traits::{float::FloatCore, real::Real, FloatConst};
 
-#[derive(Debug, Clone)]
-struct SimpleRingBuf<T: Copy, const N: usize> {
-    buffer: [T; N],
-    index: usize,
-}
+use crate::util::ring_buf::RingBuf;
 
-impl<T: Copy, const N: usize> SimpleRingBuf<T, N> {
-    pub fn new(initial_value: T) -> Self {
-        Self {
-            buffer: [initial_value; N],
-            index: 0,
-        }
-    }
-
-    pub fn push_front(&mut self, value: T) {
-        self.index = (self.index + N - 1) % N;
-        self.buffer[self.index] = value;
-    }
-}
-
-impl<T: Copy, const N: usize> Index<usize> for SimpleRingBuf<T, N> {
-    type Output = T;
-
-    fn index(&self, idx: usize) -> &Self::Output {
-        &self.buffer[(self.index + idx) % N]
-    }
-}
-
-/// Supported biquad filter types. Each type corresponds to a specific transfer function and frequency response:
+/// Supported biquad filter types. Each type corresponds to a specific transfer
+/// function and frequency response:
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum BiquadFilterType {
     /// Attenuates frequencies above the cutoff. This variant is a 2nd-order Butterworth filter,
@@ -534,15 +509,15 @@ pub type DF2BiquadFilter<T> = BiquadFilter<T, DirectForm2<T>>;
 /// and uses half the delay-line registers.
 #[derive(Debug, Clone)]
 pub struct DirectForm1<T: FloatCore + Real> {
-    x: SimpleRingBuf<T, 2>,
-    y: SimpleRingBuf<T, 2>,
+    x: RingBuf<T, 2>,
+    y: RingBuf<T, 2>,
 }
 
 impl<T: FloatCore + Real> Default for DirectForm1<T> {
     fn default() -> Self {
         Self {
-            x: SimpleRingBuf::new(t!(0)),
-            y: SimpleRingBuf::new(t!(0)),
+            x: RingBuf::new_filled(2, t!(0)),
+            y: RingBuf::new_filled(2, t!(0)),
         }
     }
 }
@@ -579,8 +554,8 @@ impl<T: FloatCore + Real> internal::BiquadTopology<T> for DirectForm1<T> {
         if !state.is_finite() {
             return Err(Error::NonFiniteState);
         }
-        self.x = SimpleRingBuf::new(state);
-        self.y = SimpleRingBuf::new(state);
+        self.x.fill(state);
+        self.y.fill(state);
         Ok(())
     }
 }

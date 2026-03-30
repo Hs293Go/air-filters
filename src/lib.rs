@@ -47,8 +47,10 @@ use core::time::Duration;
 
 use num_traits::float::FloatCore;
 
+pub mod fir;
 pub mod iir;
 pub mod nonlinear;
+mod util;
 
 /// Errors that can occur during filter configuration and operation. Each error variant
 /// is annotated with a descriptive message via [`thiserror`] when the `std` feature is enabled.
@@ -87,6 +89,25 @@ pub enum Error {
     #[cfg(any(feature = "libm", feature = "std"))]
     #[cfg_attr(feature = "std", error("Nyquist theorem violation: cutoff frequency must be less than half the sample frequency"))]
     NyquistTheoremViolation,
+
+    /// Signals when a Savitzky-Golay window size is set to a non-positive value (≤ 0).
+    #[cfg_attr(feature = "std", error("Savitzky-Golay window size must be positive"))]
+    SgNonPositiveWindowSize,
+    /// Signals when a Savitzky-Golay window size is even (must be odd).
+    #[cfg_attr(feature = "std", error("Savitzky-Golay window size must be odd"))]
+    SgEvenWindowSize,
+    /// Signals when a Savitzky-Golay window size exceeds the no_std fixed buffer limit of 19.
+    #[cfg_attr(
+        feature = "std",
+        error("Savitzky-Golay window size exceeds the no_std limit of 19; enable the `std` feature")
+    )]
+    SgWindowTooLargeForNoStd,
+    /// Signals when the polynomial order is out of range (`n < 0`, `n ≥ window_size`, or `n > 3`).
+    #[cfg_attr(feature = "std", error("Savitzky-Golay polynomial order is out of range (must be 0 ≤ n < window_size and n ≤ 3)"))]
+    SgOrderTooHigh,
+    /// Signals when the derivative order exceeds the polynomial order (`s > n` or `s < 0`).
+    #[cfg_attr(feature = "std", error("Savitzky-Golay derivative order must satisfy 0 ≤ s ≤ n"))]
+    SgDerivationOrderTooHigh,
 
     /// Signals when a filter's internal state is set to a non-finite value (NaN or infinity) during reset.
     #[cfg_attr(feature = "std", error("Filter internal state must remain finite"))]
