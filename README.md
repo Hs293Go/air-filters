@@ -28,7 +28,10 @@ The following filters are implemented:
   for various filtering tasks in UAV applications.
 - `no_std` compatible for deployment in embedded environments without the Rust
   standard library.
-  - Enable the `libm` feature for embedded targets without the stdlib.
+  - The `Pt1Filter` does **not** require a math library, making it suitable for
+    barebones embedded targets.
+  - Most of the remaining filters require floating-point math, so they require
+    the `libm` feature
 
 ## Example
 
@@ -74,14 +77,30 @@ fn main() {
 }
 ```
 
-The filters can be demonstrated by running `filter_imu_ulog` on IMU data in a
-PX4 flight log. An example command to filter the gyroscope data between 25 and
-30 seconds with a cutoff frequency of 60 Hz is:
+## Code Examples
+
+The basic application of filters can be demonstrated by running
+`filter_imu_ulog` on IMU data in a PX4 flight log. An example command to filter
+the gyroscope data between 25 and 30 seconds with a cutoff frequency of 60 Hz
+is:
 
 ```bash
-cargo run --example filter_imu_ulog -- flight_data.ulg --time-range 25 30 --cutoff-hz 60 --data-type gyro
+cargo run --example filter_imu_ulog -- flight_data.ulg --time-range 25 30 --cutoff-hz 30 --data-type accel --filter-type biquad
 ```
 
 This generates a plot of the raw and filtered data, for example:
 
 ![Example of filtering IMU data from a PX4 flight log](https://raw.githubusercontent.com/Hs293Go/air-filters/refs/heads/main/imu_filtered.svg)
+
+> [!NOTE]
+>
+> The particular log used in this example is
+> [available here](https://review.px4.io/plot_app?log=4dea01a6-5981-4028-911c-ad2bb3f2a827).
+>
+> This log was presented in
+> [a discussion on the PX4 forum](https://discuss.px4.io/t/high-vibration-in-cube-orange/32194/72)
+> about how vibration on the Cube Orange autopilot worsened after upgrading to
+> PX4 v1.14 and how the various filter and estimator parameters should be
+> retuned to mitigate the issue. Downloading the ulog file, renaming it to
+> `flight_data.ulg`, and running the above command exactly reproduces the plot
+> shown above.
