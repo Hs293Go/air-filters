@@ -263,17 +263,13 @@ impl<T: FloatCore> Filter<T> for SlewFilter<T> {
     /// magnitude.
     fn apply(&mut self, input: T) -> T {
         match self.state {
-            None => {
+            Some(state) if (input - state).abs() > self.max_delta => {
+                state // outlier: hold previous output
+            }
+            // Cold start (`None`) and in-range samples both accept `input`.
+            _ => {
                 self.state = Some(input);
                 input
-            }
-            Some(state) => {
-                if (input - state).abs() > self.max_delta {
-                    state // outlier: hold previous output
-                } else {
-                    self.state = Some(input);
-                    input
-                }
             }
         }
     }

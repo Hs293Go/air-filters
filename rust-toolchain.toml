@@ -1,0 +1,16 @@
+# Single source of truth for the Rust toolchain used by local development and CI.
+#
+# Why this is pinned: CI runs `cargo clippy -- -D warnings`. With a floating
+# `stable` toolchain, every new Rust release can add or widen a lint and turn a
+# green build red on a commit that changed nothing. (Rust 1.97 did exactly that
+# via `clippy::collapsible_match`.) Pinning makes lint results a function of the
+# repo, not of the calendar.
+#
+# Bumping: raise `channel`, run `cargo clippy --all-features -- -D warnings` and
+# `cargo fmt --check` locally, fix any new lints in the same commit. The
+# non-blocking `stable-early-warning` CI job tells you in advance what will break.
+[toolchain]
+channel = "1.97.0"
+profile = "minimal"
+components = ["clippy", "rustfmt"]
+targets = ["x86_64-unknown-linux-gnu", "thumbv7em-none-eabihf"]

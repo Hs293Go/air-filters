@@ -2,23 +2,82 @@ name: Rust CI & Publish
 
 on:
   push:
-    branches: ["main"]
-    # Trigger the publish job when pushing a version tag, e.g., `git tag v0.1.0 && git push origin v0.1.0`
+    branches: ["main", "develop"]
+    # Trigger the publish job on a version tag, e.g.
+    # `git tag v0.1.0 && git push origin v0.1.0`
     tags: ["v*"]
     paths-ignore:
       - "**.md"
   pull_request:
-    branches: ["main"]
+    branches: ["main", "develop"]
     paths-ignore:
       - "**.md"
+  # Weekly run so the non-blocking `stable-early-warning` job surfaces new
+  # upstream lints even during quiet periods.
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+# Least privilege: no job here needs write access to the repo. `publish`
+# authenticates to crates.io with a secret, not with GITHUB_TOKEN.
+permissions:
+  contents: read
+
+# Supersede in-flight runs for the same branch/PR. Never cancel tag builds,
+# which are what actually publish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
 
 jobs:
+  # Reads the pinned channel from rust-toolchain.toml so the whole workflow has
+  # exactly one source of truth for the toolchain version.
+  setup:
+    name: Resolve pinned toolchain
+    runs-on: ubuntu-latest
+    outputs:
+      channel: ${{ steps.pin.outputs.channel }}
+      msrv: ${{ steps.pin.outputs.msrv }}
+    steps:
+      # actions/checkout v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      - name: Read pinned channel and MSRV
+        id: pin
+        run: |
+          set -euo pipefail
+          channel=$(grep -oP '^\s*channel\s*=\s*"\K[^"]+' rust-toolchain.toml)
+          msrv=$(grep -oP '^\s*rust-version\s*=\s*"\K[^"]+' Cargo.toml)
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "msrv=$msrv" >> "$GITHUB_OUTPUT"
+          echo "Pinned toolchain: $channel | MSRV: $msrv"
+
+  fmt:
+    name: Format
+    needs: setup
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      # dtolnay/rust-toolchain master
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: ${{ needs.setup.outputs.channel }}
+          components: rustfmt
+
+      - run: cargo fmt --all --check
+
   test:
-    name: Build & Test
+    name: ${{ matrix.name }}
+    needs: setup
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         include:
           - name: std (x86_64)
@@ -48,56 +107,128 @@ jobs:
             no_run: true
 
     steps:
-      - uses: actions/checkout@v4
+      # actions/checkout v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
 
-      - name: Install Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - name: Install pinned Rust ${{ needs.setup.outputs.channel }}
+        # dtolnay/rust-toolchain master
+        uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
         with:
+          toolchain: ${{ needs.setup.outputs.channel }}
           targets: ${{ matrix.target }}
           components: clippy
 
-      - name: Cargo Cache
-        uses: actions/cache@v3
+      # Purpose-built Rust cache: keys on toolchain version, lockfile and target
+      # automatically, so a toolchain bump can never reuse a stale target dir.
+      # Swatinem/rust-cache v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
         with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key:
-            ${{ runner.os }}-cargo-${{ matrix.cache-key }}-${{
-            hashFiles('**/Cargo.lock') }}
+          key: ${{ matrix.cache-key }}
 
       - name: Check (Clippy)
         run:
-          cargo clippy --target ${{ matrix.target }} --no-default-features
-          --features "${{ matrix.features }}" -- -D warnings
+          cargo clippy --locked --target ${{ matrix.target }}
+          --no-default-features --features "${{ matrix.features }}" -- -D
+          warnings
 
       - name: Build
         run:
-          cargo build --target ${{ matrix.target }} --no-default-features
-          --features "${{ matrix.features }}"
+          cargo build --locked --target ${{ matrix.target }}
+          --no-default-features --features "${{ matrix.features }}"
 
       - name: Run Tests
         if: ${{ !matrix.no_run }}
         run:
-          cargo test --no-default-features --features "${{ matrix.features }}"
+          cargo test --locked --target ${{ matrix.target }}
+          --no-default-features --features "${{ matrix.features }}"
+
+  msrv:
+    name: MSRV (${{ needs.setup.outputs.msrv }})
+    needs: setup
+    runs-on: ubuntu-latest
+    steps:
+      # actions/checkout v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      # dtolnay/rust-toolchain master
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: ${{ needs.setup.outputs.msrv }}
+
+      # Swatinem/rust-cache v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32
+        with:
+          key: msrv
+
+      # Build only, no clippy: lint output on an old toolchain is not meaningful
+      # and the MSRV contract is "it compiles", not "it lints clean".
+      - name: Build on MSRV
+        run: |
+          cargo build --locked --no-default-features --features "std"
+          cargo build --locked --no-default-features --features "libm"
+          cargo build --locked --no-default-features
+
+  # Non-blocking: tells you what the next toolchain bump will cost before it
+  # lands on you. This is the safety valve that keeps pinning from silently
+  # rotting into a permanently stale toolchain.
+  stable-early-warning:
+    name: Clippy on latest stable (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      # actions/checkout v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+
+      # dtolnay/rust-toolchain master
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: stable
+          components: clippy, rustfmt
+
+      - name: Report toolchain drift
+        run: |
+          pinned=$(grep -oP '^\s*channel\s*=\s*"\K[^"]+' rust-toolchain.toml)
+          echo "Pinned: $pinned"
+          echo "Stable: $(rustup run stable rustc --version)"
+
+      # `rustup run stable` bypasses the rust-toolchain.toml pin, which would
+      # otherwise override the toolchain the action just installed.
+      - name: Clippy against latest stable
+        run: rustup run stable cargo clippy --all-features -- -D warnings
 
   publish:
     name: Publish Crate
-    needs: test # Ensures this job only runs if the 'test' job matrix passes
+    # Publish only if formatting, the full matrix and MSRV all passed.
+    needs: [setup, fmt, test, msrv]
     runs-on: ubuntu-latest
     # Only run this job if the push was a tag starting with 'v'
     if: startsWith(github.ref, 'refs/tags/v')
 
     steps:
-      - uses: actions/checkout@v4
+      # actions/checkout v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
 
-      - name: Install Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
+      # dtolnay/rust-toolchain master
+      - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
+        with:
+          toolchain: ${{ needs.setup.outputs.channel }}
+
+      # Without this, tagging v0.0.7 on a tree whose Cargo.toml still
+      # says 0.0.6 publishes 0.0.6 — or fails opaquely because that
+      # version already exists on crates.io.
+      - name: Verify tag matches Cargo.toml version
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          manifest=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "air-filters") | .version')
+          echo "Tag: $tag | Cargo.toml: $manifest"
+          if [ "$tag" != "$manifest" ]; then
+            echo "::error::Tag v$tag != Cargo.toml version $manifest"
+            exit 1
+          fi
 
       - name: Publish to crates.io
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-        run: cargo publish
+        run: cargo publish --locked

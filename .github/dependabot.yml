@@ -1,0 +1,18 @@
+version: 2
+updates:
+  # SHA-pinned actions in rust.yml cannot be updated by a moving tag, so
+  # Dependabot is what keeps them from silently rotting. It rewrites both the
+  # SHA and the trailing version comment.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    commit-message:
+      prefix: "ci"
+
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    commit-message:
+      prefix: "deps"
