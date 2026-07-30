@@ -7,6 +7,7 @@ use crate::{
 };
 
 /// A third-order low-pass filter implemented as a cascade of three first-order filters.
+#[derive(Debug, Clone)]
 pub struct Pt3Filter<T: FloatCore + Real> {
     k: T,
     state: T,

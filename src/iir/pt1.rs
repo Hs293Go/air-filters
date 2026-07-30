@@ -17,6 +17,7 @@ use crate::{
 };
 
 /// A 1st-order low-pass filter implemented using the forward Euler method for discretization.
+#[derive(Debug, Clone)]
 pub struct Pt1Filter<T: FloatCore> {
     k: T,
     state: T,
