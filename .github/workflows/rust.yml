@@ -44,7 +44,7 @@ jobs:
       msrv: ${{ steps.pin.outputs.msrv }}
     steps:
       # actions/checkout v5
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Read pinned channel and MSRV
         id: pin
@@ -62,7 +62,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # actions/checkout v5
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       # dtolnay/rust-toolchain master
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
@@ -108,7 +108,7 @@ jobs:
 
     steps:
       # actions/checkout v5
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: Install pinned Rust ${{ needs.setup.outputs.channel }}
         # dtolnay/rust-toolchain master
@@ -148,7 +148,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # actions/checkout v5
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       # dtolnay/rust-toolchain master
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
@@ -177,7 +177,7 @@ jobs:
     continue-on-error: true
     steps:
       # actions/checkout v5
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       # dtolnay/rust-toolchain master
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
@@ -206,7 +206,7 @@ jobs:
 
     steps:
       # actions/checkout v5
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       # dtolnay/rust-toolchain master
       - uses: dtolnay/rust-toolchain@2c7215f132e9ebf062739d9130488b56d53c060c
