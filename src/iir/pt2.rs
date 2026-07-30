@@ -7,6 +7,7 @@ use crate::{
 };
 
 /// A second-order low-pass filter implemented as a cascade of two first-order filters.
+#[derive(Debug, Clone)]
 pub struct Pt2Filter<T: FloatCore + Real> {
     k: T,
     state: T,
