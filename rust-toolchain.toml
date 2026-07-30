@@ -1,0 +1,11 @@
+# Pins the toolchain for local development. CI pins the same version in
+# .github/workflows/rust.yml -- bump both together.
+#
+# Why: CI runs `cargo clippy -- -D warnings`, so a floating `stable` lets any
+# new Rust release turn a green build red on a commit that changed nothing
+# (1.97 did exactly that via `clippy::collapsible_match`).
+[toolchain]
+channel = "1.97.0"
+profile = "minimal"
+components = ["clippy", "rustfmt"]
+targets = ["thumbv7em-none-eabihf"]

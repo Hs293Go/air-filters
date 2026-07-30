@@ -51,7 +51,8 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
+        # Pinned; keep in sync with rust-toolchain.toml.
+        uses: dtolnay/rust-toolchain@1.97.0
         with:
           targets: ${{ matrix.target }}
           components: clippy
@@ -95,7 +96,8 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
+        # Pinned; keep in sync with rust-toolchain.toml.
+        uses: dtolnay/rust-toolchain@1.97.0
 
       - name: Publish to crates.io
         env:
